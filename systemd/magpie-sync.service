@@ -1,0 +1,6 @@
+[Unit]
+Description=Index new screenshots and drop what magpie has finished with
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/magpie sync

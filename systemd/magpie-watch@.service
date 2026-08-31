@@ -1,0 +1,21 @@
+[Unit]
+# One watcher per clipboard type, because wl-paste negotiates a single type per
+# invocation: magpie-watch@text and magpie-watch@image.
+#
+# Bound to default.target rather than graphical-session.target: Hyprland here is
+# started outside systemd, so graphical-session never becomes active — but the
+# user manager does have WAYLAND_DISPLAY, which is all wl-paste needs.
+Description=Keep the clipboard's %i in magpie
+PartOf=default.target
+# A missing compositor is not worth a busy loop.
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/wl-paste --type %i --watch %h/.local/bin/magpie store
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=default.target
