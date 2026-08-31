@@ -21,6 +21,7 @@ __all__ = ["main"]
 USAGE = """\
 magpie — the clipboard, remembered
 
+  magpie view [--mode M]  open the window (Super+V); M is clipboard|grid|screenshots
   magpie store            take stdin as a clipboard entry (for wl-paste --watch)
   magpie sync             import Noctalia's history and index new screenshots
   magpie recover          one-off: recover the cliphist run that came before
@@ -54,6 +55,13 @@ def main(argv: list[str] | None = None) -> int:
 
 def _store(config: Config) -> Store:
     return Store(config.store)
+
+
+def cmd_view(config: Config, argv: list[str]) -> int:
+    """Open the window, or bring up the one already running."""
+    from .ui.app import run
+
+    return run(["magpie"] + argv)
 
 
 def cmd_store(config: Config, argv: list[str]) -> int:
@@ -148,6 +156,7 @@ def _line(entry) -> None:
 
 
 COMMANDS = {
+    "view": cmd_view,
     "store": cmd_store,
     "sync": cmd_sync,
     "recover": cmd_recover,

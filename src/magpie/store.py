@@ -25,9 +25,10 @@ import os
 import sqlite3
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
-__all__ = ["Store", "Entry", "kind_of"]
+__all__ = ["Store", "Entry", "Month", "kind_of", "month_bounds"]
 
 #: How much of an entry the list shows. Long enough to recognise a paragraph,
 #: short enough that a copied file never lands a screenful in the sidebar.
@@ -74,6 +75,19 @@ COLUMNS_ADDED_LATER = [
 
 
 @dataclass(frozen=True)
+class Month:
+    """One month that has something in it, and how much."""
+
+    year: int
+    month: int
+    count: int
+
+    @property
+    def key(self) -> tuple[int, int]:
+        return (self.year, self.month)
+
+
+@dataclass(frozen=True)
 class Entry:
     id: int
     key: str
@@ -107,6 +121,19 @@ def kind_of(mime: str) -> str:
     if mime.startswith("text/") or mime in ("application/json", "application/xml"):
         return "text"
     return "binary"
+
+
+def month_bounds(year: int, month: int) -> tuple[int, int]:
+    """The half-open range of milliseconds this month covers, in UTC.
+
+    Half-open so the last second of the month is inside it and the first
+    second of the next one is not — the rollover from December is where an
+    inclusive range goes wrong.
+    """
+    start = datetime(year, month, 1, tzinfo=timezone.utc)
+    end = (datetime(year + 1, 1, 1, tzinfo=timezone.utc) if month == 12
+           else datetime(year, month + 1, 1, tzinfo=timezone.utc))
+    return int(start.timestamp() * 1000), int(end.timestamp() * 1000)
 
 
 def _now_ms() -> int:
@@ -215,8 +242,30 @@ class Store:
             return Path(entry.path).read_bytes()
         return self._blob_path(entry.sha256).read_bytes()
 
+    def months(self, source: str | None = None) -> list[Month]:
+        """Which months have anything in them, newest first, with counts.
+
+        This is what the screenshot browser is navigated by. Loading 2,700
+        files to show you the twelve you took in June is what made it fall
+        over; asking the index which months exist costs one grouped scan.
+        """
+        where, params = ["deleted_at_ms IS NULL"], []
+        if source is not None:
+            where.append("source = ?")
+            params.append(source)
+        rows = self.db.execute(
+            "SELECT CAST(strftime('%Y', last_seen_ms / 1000, 'unixepoch') AS INTEGER)"
+            "         AS year,"
+            "       CAST(strftime('%m', last_seen_ms / 1000, 'unixepoch') AS INTEGER)"
+            "         AS month,"
+            "       COUNT(*) AS count"
+            f" FROM entry WHERE {' AND '.join(where)}"
+            " GROUP BY year, month ORDER BY year DESC, month DESC", params)
+        return [Month(row["year"], row["month"], row["count"]) for row in rows]
+
     def recent(self, limit: int = 200, *, kind: str | None = None,
-               source: str | None = None, pinned: bool | None = None) -> list[Entry]:
+               source: str | None = None, pinned: bool | None = None,
+               month: tuple[int, int] | None = None) -> list[Entry]:
         where, params = ["deleted_at_ms IS NULL"], []
         if kind is not None:
             where.append("kind = ?")
@@ -227,6 +276,9 @@ class Store:
         if pinned is not None:
             where.append("pinned = ?")
             params.append(1 if pinned else 0)
+        if month is not None:
+            where.append("last_seen_ms >= ? AND last_seen_ms < ?")
+            params.extend(month_bounds(*month))
         params.append(limit)
         rows = self.db.execute(
             f"SELECT * FROM entry WHERE {' AND '.join(where)}"
@@ -234,10 +286,11 @@ class Store:
         return [_entry(row) for row in rows]
 
     def search(self, query: str, limit: int = 200, *, kind: str | None = None,
-               source: str | None = None) -> list[Entry]:
+               source: str | None = None,
+               month: tuple[int, int] | None = None) -> list[Entry]:
         """Find entries by their words. An empty query is just the recent list."""
         if not query.strip():
-            return self.recent(limit, kind=kind, source=source)
+            return self.recent(limit, kind=kind, source=source, month=month)
 
         where, params = ["entry.deleted_at_ms IS NULL"], [_fts_query(query)]
         if kind is not None:
@@ -246,6 +299,9 @@ class Store:
         if source is not None:
             where.append("entry.source = ?")
             params.append(source)
+        if month is not None:
+            where.append("entry.last_seen_ms >= ? AND entry.last_seen_ms < ?")
+            params.extend(month_bounds(*month))
         params.append(limit)
         rows = self.db.execute(
             "SELECT entry.* FROM entry_fts JOIN entry ON entry.id = entry_fts.rowid"
