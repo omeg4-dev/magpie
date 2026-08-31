@@ -84,3 +84,18 @@ def test_two_screenshots_with_identical_bytes_stay_two_entries(tmp_path, store):
     shot(root, "b.png")
 
     assert import_screenshots(store, root) == 2
+
+
+def test_reindexing_does_not_make_an_old_screenshot_look_new(tmp_path, store, clock):
+    # `sync` runs hourly and walks the whole folder every time. Noticing that a
+    # file is still there is not the same as it being new, and a browser that
+    # redated 2,700 screenshots to "just now" would be useless.
+    root = tmp_path / "Screenshots"
+    shot(root, "a.png", mtime=1_600_000_000)
+    import_screenshots(store, root)
+
+    clock.advance(86_400_000)
+    import_screenshots(store, root)
+
+    entry = store.recent(source="screenshot")[0]
+    assert entry.last_seen_ms == 1_600_000_000_000

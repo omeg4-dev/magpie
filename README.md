@@ -5,6 +5,11 @@ images, and the screenshot folder they mostly come from.
 
 > The store and the capture side are done and running. The viewer is next.
 
+## What it recovered
+
+815 clipboard entries going back to 30 May 2026, out of two dead stores and a
+folder of screenshots.
+
 ## Why not just the shell's clipboard
 
 Noctalia's clipboard is an `index.json` rewritten in full on every copy. That is
@@ -33,6 +38,38 @@ that a file manager and an editor also use, so magpie indexes it in place and
 never writes to it. A screenshot and the same image on the clipboard are two
 different things — one is a file you can reveal, the other is a moment in a
 history — so they stay two entries even though the bytes are identical.
+
+### The clipboard and the screenshot folder are two lists
+
+They share a store and they are never the same list. The folder holds 2,700
+files and the clipboard holds what you actually copied; pouring one into the
+other buries the other. So the clipboard view is the clipboard, and the
+screenshot browser is a button away.
+
+A screenshot you take *now* still lands in both, because `screenshot.sh` puts
+it on the clipboard when it saves it — one entry for the copy, one for the
+file, and they are genuinely different things: one is a moment in a history,
+the other is a file you can reveal in a file manager.
+
+### Getting the old history back
+
+Before Noctalia there was cliphist, and its database is still on disk: 750
+entries, in order, with **no timestamps at all** — a monotonic counter and no
+clock.
+
+They are datable anyway. Some of those entries are screenshots that were also
+*saved*, and a file on disk has a date. Hashing the payloads against the
+screenshot folder matched 65 of them exactly, in strictly increasing counter
+order, a median of 24 minutes apart. Everything else is interpolated over the
+counter between two things that really happened.
+
+The result: 135 entries carry a measured time, 680 carry a reconstructed one
+and are marked as such — `magpie recent` prints those with a `~`, and the
+viewer will say so too. An entry between two anchors is right to within the gap
+between them, which is usually minutes; guessing is not the same as pretending
+not to have guessed.
+
+    magpie recover      # the one-off, ~2 seconds
 
 **Capture** (`capture.py`) — driven by `wl-paste`, one watcher per type,
 because wl-paste negotiates a single type per invocation and hands the content
@@ -71,9 +108,11 @@ chmod +x ~/.local/bin/magpie
 ### From the command line
 
 ```
-magpie sync             import Noctalia's history and the screenshot folder
-magpie recent [n]       what is at the top
-magpie search <query>   find entries by their words
+magpie sync             import Noctalia's history and index new screenshots
+magpie recover          one-off: recover the cliphist run that came before
+magpie recent [n]       what is at the top of the clipboard
+magpie search <query>   find clipboard entries by their words
+magpie shots [query]    the screenshot browser, which is not the clipboard
 magpie stats            what the store holds
 magpie purge            really drop what was deleted long ago
 ```

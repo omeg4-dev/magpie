@@ -48,6 +48,9 @@ CREATE TABLE IF NOT EXISTS entry (
     times_seen    INTEGER NOT NULL DEFAULT 1,
     pinned        INTEGER NOT NULL DEFAULT 0,
     deleted_at_ms INTEGER,
+    -- Set when the time was reconstructed rather than measured: everything
+    -- recovered from cliphist, which kept a counter and no clock.
+    time_approx   INTEGER NOT NULL DEFAULT 0,
     preview       TEXT    NOT NULL,
     text          TEXT    NOT NULL DEFAULT ''
 );
@@ -61,6 +64,13 @@ CREATE VIRTUAL TABLE IF NOT EXISTS entry_fts USING fts5(
     tokenize = "unicode61 remove_diacritics 2"
 );
 """
+
+
+#: Columns added after the first release, applied to a store that predates
+#: them. Append here rather than editing SCHEMA alone.
+COLUMNS_ADDED_LATER = [
+    ("time_approx", "time_approx INTEGER NOT NULL DEFAULT 0"),
+]
 
 
 @dataclass(frozen=True)
@@ -78,6 +88,7 @@ class Entry:
     times_seen: int
     pinned: bool
     deleted_at_ms: int | None
+    time_approx: bool
     preview: str
     text: str
 
@@ -115,11 +126,23 @@ class Store:
         self.db.execute("PRAGMA journal_mode = WAL")
         self.db.execute("PRAGMA synchronous = NORMAL")
         self.db.executescript(SCHEMA)
+        self._migrate()
+
+    def _migrate(self) -> None:
+        """Bring an older store up to the current schema.
+
+        The store outlives the code that made it, and losing a clipboard to a
+        new column would be an absurd way to lose one.
+        """
+        have = {row["name"] for row in self.db.execute("PRAGMA table_info(entry)")}
+        for column, definition in COLUMNS_ADDED_LATER:
+            if column not in have:
+                self.db.execute(f"ALTER TABLE entry ADD COLUMN {definition}")
 
     # -- putting things in -------------------------------------------------
 
     def add(self, data: bytes, mime: str, *, source: str = "clipboard",
-            at_ms: int | None = None) -> Entry:
+            at_ms: int | None = None, time_approx: bool = False) -> Entry:
         """Take a copy of these bytes. Seeing them again just bumps the entry."""
         digest = hashlib.sha256(data).hexdigest()
         existing = self._by_identity(source, digest)
@@ -128,35 +151,41 @@ class Store:
 
         self._write_blob(digest, data)
         return self._insert(key=digest, digest=digest, data=data, mime=mime,
-                            source=source, path=None, size=len(data), at_ms=at_ms)
+                            source=source, path=None, size=len(data), at_ms=at_ms,
+                            time_approx=time_approx)
 
     def add_file(self, path: Path | str, *, source: str = "screenshot",
                  mime: str = "application/octet-stream",
                  at_ms: int | None = None) -> Entry:
         """Index a file where it lies. The store points at it; it does not own it."""
         path = Path(path).resolve()
+        # The file's own date, decided before the identity check: `sync` walks
+        # the whole folder hourly, and noticing that a file is still there is
+        # not the same as it being new.
+        if at_ms is None:
+            at_ms = int(path.stat().st_mtime * 1000)
+
         existing = self._by_identity(source, str(path))
         if existing is not None:
             return self._seen_again(existing, at_ms)
 
         data = path.read_bytes()
-        if at_ms is None:
-            at_ms = int(path.stat().st_mtime * 1000)
         return self._insert(key=str(path), digest=hashlib.sha256(data).hexdigest(),
                             data=data, mime=mime, source=source, path=str(path),
                             size=len(data), at_ms=at_ms, name=path.name)
 
     def _insert(self, *, key, digest, data, mime, source, path, size, at_ms,
-                name: str | None = None) -> Entry:
+                name: str | None = None, time_approx: bool = False) -> Entry:
         at_ms = self._clock() if at_ms is None else at_ms
         kind = kind_of(mime)
         text = _text_of(data, kind)
         preview = _preview_of(text, kind, mime, size, name)
         cursor = self.db.execute(
             "INSERT INTO entry (key, sha256, kind, mime, source, path, bytes,"
-            "  first_seen_ms, last_seen_ms, preview, text)"
-            " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-            (key, digest, kind, mime, source, path, size, at_ms, at_ms, preview, text))
+            "  first_seen_ms, last_seen_ms, time_approx, preview, text)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            (key, digest, kind, mime, source, path, size, at_ms, at_ms,
+             1 if time_approx else 0, preview, text))
         row_id = cursor.lastrowid
         self.db.execute("INSERT INTO entry_fts (rowid, text) VALUES (?,?)",
                         (row_id, text or preview))
@@ -310,6 +339,7 @@ def _entry(row: sqlite3.Row) -> Entry:
                  bytes=row["bytes"], first_seen_ms=row["first_seen_ms"],
                  last_seen_ms=row["last_seen_ms"], times_seen=row["times_seen"],
                  pinned=bool(row["pinned"]), deleted_at_ms=row["deleted_at_ms"],
+                 time_approx=bool(row["time_approx"]),
                  preview=row["preview"], text=row["text"])
 
 

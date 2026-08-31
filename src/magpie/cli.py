@@ -12,7 +12,8 @@ from pathlib import Path
 
 from .capture import capture
 from .config import Config, load
-from .importers import import_noctalia, import_screenshots
+from .importers import (import_cliphist, import_noctalia, import_screenshots,
+                        read_cliphist)
 from .store import Store
 
 __all__ = ["main"]
@@ -21,9 +22,11 @@ USAGE = """\
 magpie — the clipboard, remembered
 
   magpie store            take stdin as a clipboard entry (for wl-paste --watch)
-  magpie sync             import Noctalia's history and the screenshot folder
-  magpie recent [n]       what is at the top of the history
-  magpie search <query>   find entries by their words
+  magpie sync             import Noctalia's history and index new screenshots
+  magpie recover          one-off: recover the cliphist run that came before
+  magpie recent [n]       what is at the top of the clipboard
+  magpie search <query>   find clipboard entries by their words
+  magpie shots [query]    the screenshot browser, which is not the clipboard
   magpie stats            what the store holds
   magpie purge            really drop what was deleted long ago
 
@@ -73,16 +76,44 @@ def cmd_sync(config: Config, argv: list[str]) -> int:
     return 0
 
 
+def cmd_recover(config: Config, argv: list[str]) -> int:
+    """The one-off: 750 entries that predate Noctalia, and no clock in sight.
+
+    Slow — it decodes every entry through cliphist — and worth running once.
+    Running it again is harmless; it just finds nothing new.
+    """
+    store = _store(config)
+    entries, first_ms, last_ms = read_cliphist()
+    if not entries:
+        print("no cliphist database to recover from")
+        return 1
+    added = import_cliphist(store, entries, first_ms=first_ms, last_ms=last_ms)
+    print(f"{added} recovered from cliphist ({len(entries)} read)")
+    return 0
+
+
 def cmd_recent(config: Config, argv: list[str]) -> int:
     limit = int(argv[0]) if argv else 20
-    for entry in _store(config).recent(limit):
+    for entry in _store(config).recent(limit, source="clipboard"):
         _line(entry)
     return 0
 
 
 def cmd_search(config: Config, argv: list[str]) -> int:
-    results = _store(config).search(" ".join(argv))
+    results = _store(config).search(" ".join(argv), source="clipboard")
     for entry in results:
+        _line(entry)
+    return 0 if results else 1
+
+
+def cmd_shots(config: Config, argv: list[str]) -> int:
+    """The screenshot browser. Deliberately a different list.
+
+    The folder holds thousands of files and the clipboard holds what you
+    actually copied; pouring one into the other would bury the other.
+    """
+    results = _store(config).search(" ".join(argv), source="screenshot")
+    for entry in results[:200]:
         _line(entry)
     return 0 if results else 1
 
@@ -106,15 +137,23 @@ def cmd_purge(config: Config, argv: list[str]) -> int:
 
 
 def _line(entry) -> None:
+    from datetime import datetime
+
     mark = "*" if entry.pinned else " "
-    print(f"{entry.id:>7}{mark} {entry.kind:<7} {entry.preview[:90]}")
+    # A reconstructed time is shown with a ~, because it was worked out from
+    # the entries around it rather than measured.
+    when = datetime.fromtimestamp(entry.last_seen_ms / 1000).strftime("%d %b %H:%M")
+    when = ("~" if entry.time_approx else " ") + when
+    print(f"{entry.id:>7}{mark} {when} {entry.kind:<7} {entry.preview[:70]}")
 
 
 COMMANDS = {
     "store": cmd_store,
     "sync": cmd_sync,
+    "recover": cmd_recover,
     "recent": cmd_recent,
     "search": cmd_search,
+    "shots": cmd_shots,
     "stats": cmd_stats,
     "purge": cmd_purge,
 }
