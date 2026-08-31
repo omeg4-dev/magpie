@@ -55,6 +55,9 @@ class MagpieApp(Gtk.Application):
     def do_startup(self) -> None:
         Gtk.Application.do_startup(self)
         style.apply()
+        # The window is open for the life of the session, and the wallpaper is
+        # not: Noctalia rewrites the palette and this follows it.
+        style.watch()
         self.store = Store(load().store)
 
     def _on_command_line(self, _app, command_line) -> int:

@@ -38,7 +38,10 @@ BY_MONTH = ("screenshots",)
 
 
 class Browse:
-    MODES = ("clipboard", "grid", "screenshots", "starred")
+    #: In the order they are drawn on the rail: the list, the same history as
+    #: cards, what you kept, and the folder — which is last because it is the
+    #: one that is not the clipboard.
+    MODES = ("clipboard", "grid", "starred", "screenshots")
 
     def __init__(self, store: Store, limit: int = 2000) -> None:
         self._store = store

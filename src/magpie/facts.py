@@ -15,7 +15,11 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
-__all__ = ["lines"]
+__all__ = ["lines", "QUIET"]
+
+#: Lines that are the absence of a fact rather than a fact. The window draws
+#: these more quietly, because "no words in it" is not something to read.
+QUIET = ("not read yet", "no words in it")
 
 #: How much of an OCR reading is worth showing. It is there to tell you this is
 #: the right screenshot, not to be read.
@@ -61,10 +65,10 @@ def _picture(entry, dimensions: tuple[int, int] | None) -> list[str]:
 def _reading(entry) -> str:
     """What OCR made of it — or which kind of nothing it made of it."""
     if not entry.read_yet:
-        return "not read yet"
+        return QUIET[0]
     words = " ".join(entry.text.split())
     if not words:
-        return "no words in it"
+        return QUIET[1]
     if len(words) > READING:
         words = words[:READING - 1].rstrip() + "…"
     return f"“{words}”"

@@ -33,7 +33,7 @@ from gi.repository import Gdk, Gio, GLib, GObject, Gtk, Pango
 
 from .. import sounds
 from ..browse import Browse
-from ..facts import lines as facts_for
+from ..facts import QUIET, lines as facts_for
 from ..paste import to_clipboard
 from ..shape import to_tile
 from ..store import Entry
@@ -48,11 +48,12 @@ __all__ = ["Window"]
 MODE_ICONS = {
     "clipboard": ("\uf0ea", "Clipboard"),       # nf-fa-clipboard
     "grid": ("\uf009", "Grid"),                 # nf-fa-th_large
-    "screenshots": ("\uf030", "Screenshots"),   # nf-fa-camera
     "starred": ("\uf005", "Starred"),           # nf-fa-star
+    "screenshots": ("\uf030", "Screenshots"),   # nf-fa-camera
 }
 CLOSE_ICON = "\uf00d"   # nf-fa-times
-STAR_ICON = "\uf005"    # nf-fa-star
+STAR_ICON = "\uf005"    # nf-fa-star, filled
+STAR_OUTLINE = "\uf006"  # nf-fa-star_o, an offer rather than a fact
 
 #: The modes drawn as a grid of cards rather than as a list. Starred is a list
 #: because it is a mixed pile — a kept screenshot next to a kept licence key —
@@ -89,6 +90,10 @@ WIDTH, HEIGHT = 1040, 690
 #: over before you could have read anything in it.
 APPEAR_MS = 105
 RISE = 8
+
+#: The keys that make the window go away. They are acted on when they are
+#: released rather than when they are pressed — see `_on_key_release`.
+CLOSING = (Gdk.KEY_Escape, Gdk.KEY_Return, Gdk.KEY_KP_Enter)
 
 #: How many lines the facts block can hold: what it is, when, the file, the
 #: folder, and what was read off it.
@@ -205,14 +210,12 @@ class Window(Gtk.Window):
         self.list = Gtk.ListView(model=self.selection,
                                  factory=self._factory(Row))
         self.list.add_css_class("list")
-        self.list.connect("activate", lambda *_: self.copy_and_close())
 
         self.grid = Gtk.GridView(model=self.selection,
                                  factory=self._factory(Tile))
         self.grid.add_css_class("gallery")
         self.grid.set_min_columns(2)
         self.grid.set_max_columns(8)
-        self.grid.connect("activate", lambda *_: self.copy_and_close())
 
         self.scroller = Gtk.ScrolledWindow(vexpand=True)
         self.scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
@@ -264,9 +267,13 @@ class Window(Gtk.Window):
             label.set_max_width_chars(1)
             self._fact_lines.append(label)
             self.facts.append(label)
-        pane.append(self.facts)
-
-        pane.append(self._build_actions())
+        # The facts and the buttons are one footer under the picture rather
+        # than two boxes stacked on it, with a single hairline above the pair.
+        footer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        footer.add_css_class("footer")
+        footer.append(self.facts)
+        footer.append(self._build_actions())
+        pane.append(footer)
         return pane
 
     def _build_actions(self) -> Gtk.Widget:
@@ -280,7 +287,10 @@ class Window(Gtk.Window):
         bar.set_row_spacing(8)
 
         self.copy_button = _button("Copy", self.copy_and_close, "primary")
-        self.star_button = _button("Star", self._star)
+        # A star, not the word for one. Outlined while it is only an offer,
+        # filled and yellow once you have taken it.
+        self.star_button = _button(STAR_OUTLINE, self._star, "star")
+        self.star_button.set_tooltip_text("Keep this (Starred)")
         self.popout_button = _button("Pop out", self._popout)
         self.open_button = _button("Open", self._open)
         self.reveal_button = _button("Show in files", self._reveal)
@@ -353,14 +363,29 @@ class Window(Gtk.Window):
         # the filter box. Typing and choosing are one motion here.
         keys.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
         keys.connect("key-pressed", self._on_key)
+        keys.connect("key-released", self._on_key_release)
         self.add_controller(keys)
+
+    def _on_key_release(self, _controller, keyval, _code, _state) -> bool:
+        """The two keys that close the window act here, not on the press.
+
+        Closing on the press hands the keyboard back to whatever was
+        underneath before the key is let go, and that window gets the release —
+        which is how pressing Escape to dismiss the clipboard also dismissed
+        the dialog behind it, and how Enter left a newline in the editor.
+        """
+        if keyval not in CLOSING:
+            return False
+        if keyval == Gdk.KEY_Escape:
+            self.close()
+        else:
+            self.copy_and_close()
+        return True
 
     def _on_key(self, _controller, keyval, _code, _state) -> bool:
         step = self.grid_step() if self._pictures else 1
-        if keyval == Gdk.KEY_Escape:
-            self.close()
-        elif keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter):
-            self.copy_and_close()
+        if keyval in CLOSING:
+            return True  # swallowed here, acted on when it is let go
         elif keyval == Gdk.KEY_Up:
             self._move(-step)
         elif keyval == Gdk.KEY_Down:
@@ -538,8 +563,17 @@ class Window(Gtk.Window):
         # The cheap half is immediate; only the picture waits.
         self._say_facts(entry)
         self._enable_actions(entry)
-        self.star_button.set_label("Unstar" if entry.starred else "Star")
+        self._show_star(entry.starred)
         self._preview_soon(entry)
+
+    def _show_star(self, starred: bool) -> None:
+        self.star_button.set_label(STAR_ICON if starred else STAR_OUTLINE)
+        if starred:
+            self.star_button.add_css_class("on")
+        else:
+            self.star_button.remove_css_class("on")
+        self.star_button.set_tooltip_text(
+            "Starred — click to let it go" if starred else "Keep this")
 
     def _say_facts(self, entry: Entry | None) -> None:
         said = [] if entry is None else facts_for(
@@ -547,6 +581,11 @@ class Window(Gtk.Window):
         for label, text in zip(self._fact_lines, said + [""] * FACT_LINES):
             label.set_text(text)
             label.set_visible(bool(text))
+            # "no words in it" is the absence of a fact, not a fact.
+            if text in QUIET:
+                label.add_css_class("fact-quiet")
+            else:
+                label.remove_css_class("fact-quiet")
 
     def _preview_soon(self, entry: Entry) -> None:
         """Draw the preview when the selection stops moving.
@@ -598,7 +637,10 @@ class Window(Gtk.Window):
     def _enable_actions(self, entry: Entry | None) -> None:
         has = entry is not None
         self.copy_button.set_sensitive(has)
-        self.star_button.set_sensitive(has)
+        # A screenshot is starred from the clipboard, where it lands when you
+        # take it — not from the folder, which is a view of the disk and not a
+        # pile of things you chose to keep.
+        self.star_button.set_visible(has and self.browse.mode != "screenshots")
         # Pop out is for looking at a picture properly; there is nothing in a
         # line of text the preview is not already showing.
         self.popout_button.set_visible(has and entry.is_image)

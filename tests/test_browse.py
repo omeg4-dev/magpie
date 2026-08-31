@@ -296,7 +296,7 @@ def test_starring_leaves_the_entry_in_the_clipboard(store):
 
 
 def test_the_modes_are_the_buttons_on_the_rail():
-    assert Browse.MODES == ("clipboard", "grid", "screenshots", "starred")
+    assert Browse.MODES == ("clipboard", "grid", "starred", "screenshots")
 
 
 def test_a_mode_that_does_not_exist_is_refused(filled):

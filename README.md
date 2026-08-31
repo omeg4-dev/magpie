@@ -84,6 +84,15 @@ the window once at login and then waits, hidden. Opening it is one query and
 one draw: about ten milliseconds, against half a second to start GTK and open
 the store.
 
+**The colours are the wallpaper's.** Noctalia regenerates the desktop's palette
+on every wallpaper change and writes it to `~/.config/hypr/noctalia.lua`;
+magpie reads that and derives everything from it (`palette.py`) — the three
+panels are the surface colour stepped up and down, the caret and the lit mode
+are the primary, the text is white tinted towards it. There is a file monitor
+on it, so the window follows a wallpaper change without being restarted. Two
+colours are not the wallpaper's business: the star is yellow because a star is
+yellow, and Delete is the theme's own error colour.
+
 **The caret is always in the filter box.** Typing narrows the list whatever
 else you were doing — including while you are arrowing through it, because
 narrowing and looking are the same motion. Every other control has focus turned
@@ -111,7 +120,9 @@ row of months under it, and only the chosen month is ever loaded. Loading all
 *Starred* — everything you said to keep, wherever it came from: a kept licence
 key and a kept screenshot in the same list. Starring is a bookmark and not a
 move, so the entry also stays exactly where it was, and a starred entry is
-never purged.
+never purged. The star is only offered where keeping something means something:
+the folder view is a view of the disk, so a screenshot is starred from the
+clipboard, where it lands when you take it.
 
 Under the preview is what the thing actually is. For a picture that is a short
 block rather than a line — the size in pixels first, then when it arrived, its
@@ -129,10 +140,17 @@ Super + V           the clipboard
 Super + Shift + V   straight into the screenshot browser
 Escape              close
 Enter               copy and close
+click               select — looking is not choosing; Enter copies
 Up / Down           move; Left / Right too, in the grid
 Page Up / Down      ten rows at a time
 anything else       goes into the filter box
 ```
+
+Escape and Enter do their work when they are **released**, not when they are
+pressed. Closing on the press hands the keyboard back to the window underneath
+before the key is let go, and that window gets the release — which is how
+pressing Escape to dismiss the clipboard also dismissed the dialog behind it,
+and how Enter left a newline in the editor.
 
 ### The sounds
 
