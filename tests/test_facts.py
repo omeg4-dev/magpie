@@ -70,26 +70,14 @@ def test_a_pasted_image_has_no_file_lines():
     assert not any(line.startswith("/") for line in said)
 
 
-def test_what_was_read_off_the_picture_is_quoted():
-    said = lines(png(text="Total: 49,90 EUR", ocr_ms=1))
-    assert any("Total: 49,90 EUR" in line for line in said)
+def test_the_pane_says_nothing_about_what_was_read():
+    # The words OCR found are for the search box to match on, not for anyone
+    # to read here: a quarter of a transcript under the picture told you
+    # nothing you could not see in the picture itself.
+    said = " ".join(lines(png(text="Total: 49,90 EUR", ocr_ms=1)))
+    assert "Total" not in said
+    assert "not read yet" not in said
 
 
-def test_a_long_reading_is_cut_to_one_line():
-    said = lines(png(text="word " * 200, ocr_ms=1))
-    assert all(len(line) < 120 for line in said)
-
-
-def test_a_picture_with_no_words_in_it_says_so():
-    assert "no words" in " ".join(lines(png(ocr_ms=1)))
-
-
-def test_a_picture_nobody_has_read_yet_says_that_instead():
-    # Different from "no words in it", and the difference matters while the
-    # backlog is still working through three thousand screenshots.
-    assert "not read yet" in " ".join(lines(png(ocr_ms=None)))
-
-
-def test_the_reading_is_one_line_however_many_it_had():
-    said = lines(png(text="first line\nsecond line\nthird", ocr_ms=1))
-    assert len(said) == len(lines(png(text="first line", ocr_ms=1)))
+def test_an_unread_picture_looks_like_any_other():
+    assert lines(png(ocr_ms=None)) == lines(png(text="words", ocr_ms=1))

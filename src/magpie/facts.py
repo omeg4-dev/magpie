@@ -5,9 +5,11 @@ picture: it ran out exactly where the filename began, and it never had room for
 the size in pixels, which is the first thing anyone wants to know about an
 image.
 
-So a picture gets a short block instead — what it is, when it arrived, where it
-lives, and what was read off it — and everything else keeps its one line. No
-GTK in here, because deciding what to say is not drawing.
+So a picture gets a short block instead — what it is, when it arrived and where
+it lives — and everything else keeps its one line. What OCR read off it is
+deliberately not here: it is what the search box matches on, and a quarter of a
+transcript under the picture told you nothing the picture did not. No GTK in
+here, because deciding what to say is not drawing.
 """
 
 from __future__ import annotations
@@ -15,15 +17,7 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
-__all__ = ["lines", "QUIET"]
-
-#: Lines that are the absence of a fact rather than a fact. The window draws
-#: these more quietly, because "no words in it" is not something to read.
-QUIET = ("not read yet", "no words in it")
-
-#: How much of an OCR reading is worth showing. It is there to tell you this is
-#: the right screenshot, not to be read.
-READING = 96
+__all__ = ["lines"]
 
 
 def lines(entry, dimensions: tuple[int, int] | None = None) -> list[str]:
@@ -58,20 +52,7 @@ def _picture(entry, dimensions: tuple[int, int] | None) -> list[str]:
         # the end of the line.
         said.append(Path(entry.path).name)
         said.append(str(Path(entry.path).parent))
-    said.append(_reading(entry))
     return said
-
-
-def _reading(entry) -> str:
-    """What OCR made of it — or which kind of nothing it made of it."""
-    if not entry.read_yet:
-        return QUIET[0]
-    words = " ".join(entry.text.split())
-    if not words:
-        return QUIET[1]
-    if len(words) > READING:
-        words = words[:READING - 1].rstrip() + "…"
-    return f"“{words}”"
 
 
 def _when(entry) -> str:

@@ -33,7 +33,7 @@ from gi.repository import Gdk, Gio, GLib, GObject, Gtk, Pango
 
 from .. import sounds
 from ..browse import Browse
-from ..facts import QUIET, lines as facts_for
+from ..facts import lines as facts_for
 from ..paste import to_clipboard
 from ..shape import to_tile
 from ..store import Entry
@@ -95,9 +95,9 @@ RISE = 8
 #: released rather than when they are pressed — see `_on_key_release`.
 CLOSING = (Gdk.KEY_Escape, Gdk.KEY_Return, Gdk.KEY_KP_Enter)
 
-#: How many lines the facts block can hold: what it is, when, the file, the
-#: folder, and what was read off it.
-FACT_LINES = 5
+#: How many lines the facts block can hold: what it is, when, the file and the
+#: folder it is in.
+FACT_LINES = 4
 
 #: How long the filter box waits before it asks. Typing six characters used to
 #: mean six searches and six rebuilds; at this delay a normal burst of typing
@@ -287,16 +287,13 @@ class Window(Gtk.Window):
         bar.set_row_spacing(8)
 
         self.copy_button = _button("Copy", self.copy_and_close, "primary")
-        # A star, not the word for one. Outlined while it is only an offer,
-        # filled and yellow once you have taken it.
-        self.star_button = _button(STAR_OUTLINE, self._star, "star")
-        self.star_button.set_tooltip_text("Keep this (Starred)")
+        # No star here: it lives on the row, where the thing it keeps is.
         self.popout_button = _button("Pop out", self._popout)
         self.open_button = _button("Open", self._open)
         self.reveal_button = _button("Show in files", self._reveal)
         delete = _button("Delete", self._delete, "danger")
 
-        for widget in (self.copy_button, self.star_button, self.popout_button,
+        for widget in (self.copy_button, self.popout_button,
                        self.open_button, self.reveal_button, delete):
             bar.append(widget)
         return bar
@@ -563,17 +560,7 @@ class Window(Gtk.Window):
         # The cheap half is immediate; only the picture waits.
         self._say_facts(entry)
         self._enable_actions(entry)
-        self._show_star(entry.starred)
         self._preview_soon(entry)
-
-    def _show_star(self, starred: bool) -> None:
-        self.star_button.set_label(STAR_ICON if starred else STAR_OUTLINE)
-        if starred:
-            self.star_button.add_css_class("on")
-        else:
-            self.star_button.remove_css_class("on")
-        self.star_button.set_tooltip_text(
-            "Starred — click to let it go" if starred else "Keep this")
 
     def _say_facts(self, entry: Entry | None) -> None:
         said = [] if entry is None else facts_for(
@@ -581,11 +568,6 @@ class Window(Gtk.Window):
         for label, text in zip(self._fact_lines, said + [""] * FACT_LINES):
             label.set_text(text)
             label.set_visible(bool(text))
-            # "no words in it" is the absence of a fact, not a fact.
-            if text in QUIET:
-                label.add_css_class("fact-quiet")
-            else:
-                label.remove_css_class("fact-quiet")
 
     def _preview_soon(self, entry: Entry) -> None:
         """Draw the preview when the selection stops moving.
@@ -637,10 +619,6 @@ class Window(Gtk.Window):
     def _enable_actions(self, entry: Entry | None) -> None:
         has = entry is not None
         self.copy_button.set_sensitive(has)
-        # A screenshot is starred from the clipboard, where it lands when you
-        # take it — not from the folder, which is a view of the disk and not a
-        # pile of things you chose to keep.
-        self.star_button.set_visible(has and self.browse.mode != "screenshots")
         # Pop out is for looking at a picture properly; there is nothing in a
         # line of text the preview is not already showing.
         self.popout_button.set_visible(has and entry.is_image)
@@ -659,11 +637,6 @@ class Window(Gtk.Window):
     def _star_row(self, entry_id: int) -> None:
         """The star on a row: that one, whatever the arrows are pointing at."""
         self.browse.star(entry_id)
-        self.refresh(reselect=False)
-        self.filter.grab_focus_without_selecting()
-
-    def _star(self) -> None:
-        self.browse.star_selected()
         self.refresh(reselect=False)
         self.filter.grab_focus_without_selecting()
 

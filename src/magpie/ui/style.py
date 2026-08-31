@@ -200,7 +200,6 @@ window.magpie {{
   font-size: 11px;
   color: {p.ash};
 }}
-.fact-quiet {{ color: {p.faint}; font-style: italic; }}
 
 .actions {{
   background: transparent;
@@ -229,17 +228,6 @@ window.magpie {{
   border-color: {p.danger};
   color: {p.danger};
 }}
-
-/* The star is a star: outlined when it is only an offer, filled and yellow
-   when you have taken it. */
-.actions button.star {{
-  font-family: {MONO};
-  font-size: 13px;
-  padding: 6px 12px;
-  color: {p.ash};
-}}
-.actions button.star.on {{ color: {p.gold}; border-color: {mix(p.quill, p.gold, 0.45)}; }}
-.actions button.star:hover {{ color: {p.gold}; }}
 
 /* ── the gallery ──────────────────────────────────────────────────────── */
 
