@@ -10,7 +10,10 @@ StartLimitBurst=5
 [Service]
 Type=simple
 ExecStart=%h/.local/bin/magpie view --hidden
-Restart=always
+# on-failure, not always: a second `magpie view --hidden` hands its
+# request to the instance already running and exits cleanly, and
+# restarting that is a loop into the start limit.
+Restart=on-failure
 RestartSec=3
 
 [Install]
