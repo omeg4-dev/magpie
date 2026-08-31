@@ -109,9 +109,13 @@ def test_the_accent_is_the_wallpaper_colour(dark):
     assert dark.accent == dark.primary
 
 
-def test_a_light_wallpaper_turns_the_text_dark():
-    light = Palette(primary="#4a5a8a", surface="#f2f0ec", secondary="#8a8a90",
-                    error="#ba1a1a", tertiary="#6a5a70", surface_lowest="#ffffff")
+@pytest.fixture
+def light():
+    return Palette(primary="#4a5a8a", surface="#f2f0ec", secondary="#8a8a90",
+                   error="#ba1a1a", tertiary="#6a5a70", surface_lowest="#ffffff")
+
+
+def test_a_light_wallpaper_turns_the_text_dark(light):
     assert light.bone < "#404040"
     assert light.rail > "#d0d0d0"
 
@@ -122,3 +126,13 @@ def test_every_role_is_a_colour_a_stylesheet_will_take(dark):
     for role in ("rail", "ink", "pane", "slate", "quill", "bone", "ash",
                  "accent", "danger", "edge"):
         assert re.fullmatch(r"#[0-9a-f]{6}", getattr(dark, role)), role
+
+
+def test_the_scrim_is_dark_enough_to_read_a_glyph_on(dark):
+    # It sits on top of a screenshot, which can be any colour at all, so it
+    # cannot be derived from the wallpaper alone the way the panels are.
+    assert dark.scrim < "#303030"
+
+
+def test_the_scrim_is_dark_on_a_light_wallpaper_too(light):
+    assert light.scrim < "#303030"

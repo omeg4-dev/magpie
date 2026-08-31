@@ -165,6 +165,16 @@ class Palette:
         return self.error
 
     @property
+    def scrim(self) -> str:
+        """Something for a glyph to sit on when a picture is behind it.
+
+        Dark whatever the wallpaper is: it lands on top of a screenshot, which
+        can be any colour at all, so it is the one role the palette does not
+        get to tint.
+        """
+        return mix("#000000", self.primary, 0.12)
+
+    @property
     def gold(self) -> str:
         return GOLD
 

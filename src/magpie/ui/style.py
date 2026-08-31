@@ -171,6 +171,20 @@ window.magpie {{
 .row-star.on {{ color: {p.gold}; }}
 .row-star:hover {{ color: {p.gold}; }}
 
+/* The same star in the corner of a tile, where it has a picture behind it
+   and needs something to sit on to stay readable. */
+.tile-star {{
+  font-family: {MONO};
+  font-size: 12px;
+  color: {p.bone};
+  background: {p.scrim};
+  border-radius: 9px;
+  padding: 3px 6px;
+  margin: 6px;
+}}
+.tile-star.on {{ color: {p.gold}; }}
+.tile-star:hover {{ color: {p.gold}; }}
+
 .approx {{ color: {p.ash}; font-style: italic; }}
 
 /* ── the preview ──────────────────────────────────────────────────────── */

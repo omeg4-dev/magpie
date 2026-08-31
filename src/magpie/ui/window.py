@@ -212,7 +212,8 @@ class Window(Gtk.Window):
         self.list.add_css_class("list")
 
         self.grid = Gtk.GridView(model=self.selection,
-                                 factory=self._factory(Tile))
+                                 factory=self._factory(
+                                     lambda: Tile(self._star_row, self._may_star)))
         self.grid.add_css_class("gallery")
         self.grid.set_min_columns(2)
         self.grid.set_max_columns(8)
@@ -634,6 +635,9 @@ class Window(Gtk.Window):
             sounds.play("copy", self._player)
             self.close()
 
+    def _may_star(self) -> bool:
+        return self.browse.mode != "screenshots"
+
     def _star_row(self, entry_id: int) -> None:
         """The star on a row: that one, whatever the arrows are pointing at."""
         self.browse.star(entry_id)
@@ -858,9 +862,17 @@ class Tile(Card):
 
     __gtype_name__ = "MagpieTile"
 
-    def __init__(self) -> None:
+    def __init__(self, on_star=None, may_star=None) -> None:
         super().__init__(Gtk.Orientation.VERTICAL)
         self.add_css_class("tile-box")
+        self._on_star = on_star
+        # The screenshot folder is a view of the disk, not a pile of things
+        # you chose to keep: a shot is starred from the clipboard, where it
+        # lands when you take it. Both modes are drawn by this same view, so
+        # the tile has to ask which one it is being drawn for.
+        self._may_star = may_star
+        self._entry_id: int | None = None
+        self._starred = False
 
         self.card = Gtk.Overlay()
         self.card.add_css_class("tile")
@@ -890,6 +902,23 @@ class Tile(Card):
         self.caption.set_ellipsize(Pango.EllipsizeMode.END)
         self.caption.set_max_width_chars(1)
 
+        # In the corner, over the picture: the same offer the list makes, in
+        # the only place a tile has to spare.
+        self.star = Gtk.Label(label=STAR_OUTLINE)
+        self.star.add_css_class("tile-star")
+        self.star.set_halign(Gtk.Align.END)
+        self.star.set_valign(Gtk.Align.START)
+        self.star.set_opacity(0)
+        self.card.add_overlay(self.star)
+        click = Gtk.GestureClick()
+        click.connect("pressed", self._star_pressed)
+        self.star.add_controller(click)
+
+        self.motion = Gtk.EventControllerMotion()
+        self.motion.connect("enter", lambda *_a: self._hover(True))
+        self.motion.connect("leave", lambda *_a: self._hover(False))
+        self.card.add_controller(self.motion)
+
         self.append(self.card)
         self.append(self.caption)
 
@@ -900,6 +929,25 @@ class Tile(Card):
         self._picture(entry, thumbs, (TILE_W, TILE_H), self._show_picture)
         self.caption.set_text(_when(entry))
         _approximate(self.caption, entry.time_approx)
+
+        self._entry_id = entry.id
+        self._starred = entry.starred
+        self.star.set_label(STAR_ICON if entry.starred else STAR_OUTLINE)
+        if entry.starred:
+            self.star.add_css_class("on")
+        else:
+            self.star.remove_css_class("on")
+        self.star.set_visible(self._may_star is None or self._may_star())
+        # A recycled tile: ask where the pointer is rather than remembering.
+        self._hover(self.motion.contains_pointer())
+
+    def _hover(self, over: bool) -> None:
+        self.star.set_opacity(1 if (over or self._starred) else 0)
+
+    def _star_pressed(self, gesture, *_args) -> None:
+        gesture.set_state(Gtk.EventSequenceState.CLAIMED)
+        if self._on_star is not None and self._entry_id is not None:
+            self._on_star(self._entry_id)
 
     def _show_picture(self, texture) -> None:
         self.picture.set_paintable(texture)
