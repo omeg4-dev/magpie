@@ -13,7 +13,12 @@ from __future__ import annotations
 import os
 import sys
 
-__all__ = ["ensure_preloaded", "find_library", "preload_env"]
+__all__ = ["ensure_preloaded", "find_library", "preload_env", "wanted"]
+
+#: The only command that draws anything. LD_PRELOAD is inherited by every
+#: child, and `magpie ocr` spawns thousands of magick and tesseract processes
+#: that have no business loading a Wayland library.
+DRAWS = "view"
 
 #: The library itself, first. gtk4-layer-shell also ships a
 #: liblayer-shell-preload.so, but preloading that one alone still leaves the
@@ -29,6 +34,11 @@ CANDIDATES = (
 #: Set on the re-executed process so a library that fails to help cannot send
 #: us round the loop for ever.
 MARKER = "MAGPIE_PRELOADED"
+
+
+def wanted(argv: list[str]) -> bool:
+    """Whether this invocation is the one that puts a surface on screen."""
+    return bool(argv) and argv[0] == DRAWS
 
 
 def find_library(candidates: tuple[str, ...] = CANDIDATES) -> str | None:

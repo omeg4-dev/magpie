@@ -61,11 +61,11 @@ def test_an_entry_keeps_the_moment_noctalia_saw_it(noctalia, store):
     assert store.recent()[0].first_seen_ms == 1_700_000_000_000
 
 
-def test_a_pin_comes_across_with_it(noctalia, store):
+def test_a_star_comes_across_with_it(noctalia, store):
     noctalia.save([noctalia.write("1-0", b"key", "text/plain", 1_000, pinned=True)])
     import_noctalia(store, noctalia)
 
-    assert store.recent()[0].pinned
+    assert store.recent()[0].starred
 
 
 def test_the_payload_comes_across_intact(noctalia, store):

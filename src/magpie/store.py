@@ -47,13 +47,16 @@ CREATE TABLE IF NOT EXISTS entry (
     first_seen_ms INTEGER NOT NULL,
     last_seen_ms  INTEGER NOT NULL,
     times_seen    INTEGER NOT NULL DEFAULT 1,
-    pinned        INTEGER NOT NULL DEFAULT 0,
+    starred       INTEGER NOT NULL DEFAULT 0,
     deleted_at_ms INTEGER,
     -- Set when the time was reconstructed rather than measured: everything
     -- recovered from cliphist, which kept a counter and no clock.
     time_approx   INTEGER NOT NULL DEFAULT 0,
     preview       TEXT    NOT NULL,
-    text          TEXT    NOT NULL DEFAULT ''
+    text          TEXT    NOT NULL DEFAULT '',
+    -- When the picture was read. Set even when nothing was found in it, so
+    -- the reader does not come back to the same blank screenshot every hour.
+    ocr_ms        INTEGER
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS entry_identity ON entry(source, key);
@@ -71,7 +74,12 @@ CREATE VIRTUAL TABLE IF NOT EXISTS entry_fts USING fts5(
 #: them. Append here rather than editing SCHEMA alone.
 COLUMNS_ADDED_LATER = [
     ("time_approx", "time_approx INTEGER NOT NULL DEFAULT 0"),
+    ("ocr_ms", "ocr_ms INTEGER"),
 ]
+
+#: Columns that changed their name. `pinned` became `starred` when pinning
+#: became a starred list you can open on its own.
+COLUMNS_RENAMED = [("pinned", "starred")]
 
 
 @dataclass(frozen=True)
@@ -100,11 +108,17 @@ class Entry:
     first_seen_ms: int
     last_seen_ms: int
     times_seen: int
-    pinned: bool
+    starred: bool
     deleted_at_ms: int | None
     time_approx: bool
     preview: str
     text: str
+    ocr_ms: int | None = None
+
+    @property
+    def read_yet(self) -> bool:
+        """Whether this picture has been through OCR (however little it said)."""
+        return self.ocr_ms is not None
 
     @property
     def is_image(self) -> bool:
@@ -162,6 +176,11 @@ class Store:
         new column would be an absurd way to lose one.
         """
         have = {row["name"] for row in self.db.execute("PRAGMA table_info(entry)")}
+        for old, new in COLUMNS_RENAMED:
+            if old in have and new not in have:
+                self.db.execute(f"ALTER TABLE entry RENAME COLUMN {old} TO {new}")
+                have.discard(old)
+                have.add(new)
         for column, definition in COLUMNS_ADDED_LATER:
             if column not in have:
                 self.db.execute(f"ALTER TABLE entry ADD COLUMN {definition}")
@@ -227,9 +246,33 @@ class Store:
         return self.get(entry.id)
 
     def set_text(self, entry_id: int, text: str) -> None:
-        """Give an entry words it did not arrive with — this is how OCR lands."""
+        """Give an entry words it did not arrive with."""
         self.db.execute("UPDATE entry SET text = ? WHERE id = ?", (text, entry_id))
         self.db.execute("UPDATE entry_fts SET text = ? WHERE rowid = ?", (text, entry_id))
+
+    def set_ocr(self, entry_id: int, text: str) -> None:
+        """What was read off a picture, and the fact that it has been read.
+
+        The time is recorded even when the text is empty. Most screenshots are
+        of something with no words in it at all, and a reader that treats "no
+        text" as "not read yet" comes back to every one of them for ever.
+        """
+        self.set_text(entry_id, text)
+        self.db.execute("UPDATE entry SET ocr_ms = ? WHERE id = ?",
+                        (self._clock(), entry_id))
+
+    def unread_images(self, limit: int = 5_000) -> list[Entry]:
+        """Pictures nobody has read yet, newest first.
+
+        Newest first because the screenshot you want to find is far more often
+        one from this week than one from 2022, and a backlog of thousands is
+        worth something long before it is finished.
+        """
+        rows = self.db.execute(
+            "SELECT * FROM entry WHERE kind = 'image' AND ocr_ms IS NULL"
+            "  AND deleted_at_ms IS NULL"
+            " ORDER BY last_seen_ms DESC, id DESC LIMIT ?", (limit,))
+        return [_entry(row) for row in rows]
 
     # -- getting things out ------------------------------------------------
 
@@ -264,7 +307,7 @@ class Store:
         return [Month(row["year"], row["month"], row["count"]) for row in rows]
 
     def recent(self, limit: int = 200, *, kind: str | None = None,
-               source: str | None = None, pinned: bool | None = None,
+               source: str | None = None, starred: bool | None = None,
                month: tuple[int, int] | None = None) -> list[Entry]:
         where, params = ["deleted_at_ms IS NULL"], []
         if kind is not None:
@@ -273,9 +316,9 @@ class Store:
         if source is not None:
             where.append("source = ?")
             params.append(source)
-        if pinned is not None:
-            where.append("pinned = ?")
-            params.append(1 if pinned else 0)
+        if starred is not None:
+            where.append("starred = ?")
+            params.append(1 if starred else 0)
         if month is not None:
             where.append("last_seen_ms >= ? AND last_seen_ms < ?")
             params.extend(month_bounds(*month))
@@ -286,11 +329,12 @@ class Store:
         return [_entry(row) for row in rows]
 
     def search(self, query: str, limit: int = 200, *, kind: str | None = None,
-               source: str | None = None,
+               source: str | None = None, starred: bool | None = None,
                month: tuple[int, int] | None = None) -> list[Entry]:
         """Find entries by their words. An empty query is just the recent list."""
         if not query.strip():
-            return self.recent(limit, kind=kind, source=source, month=month)
+            return self.recent(limit, kind=kind, source=source, starred=starred,
+                               month=month)
 
         where, params = ["entry.deleted_at_ms IS NULL"], [_fts_query(query)]
         if kind is not None:
@@ -299,6 +343,9 @@ class Store:
         if source is not None:
             where.append("entry.source = ?")
             params.append(source)
+        if starred is not None:
+            where.append("entry.starred = ?")
+            params.append(1 if starred else 0)
         if month is not None:
             where.append("entry.last_seen_ms >= ? AND entry.last_seen_ms < ?")
             params.extend(month_bounds(*month))
@@ -309,19 +356,24 @@ class Store:
             " ORDER BY entry.last_seen_ms DESC, entry.id DESC LIMIT ?", params)
         return [_entry(row) for row in rows]
 
-    def count(self, *, source: str | None = None) -> int:
+    def count(self, *, source: str | None = None,
+              starred: bool | None = None) -> int:
         sql = "SELECT COUNT(*) FROM entry WHERE deleted_at_ms IS NULL"
-        params = ()
+        params: list = []
         if source is not None:
             sql += " AND source = ?"
-            params = (source,)
+            params.append(source)
+        if starred is not None:
+            sql += " AND starred = ?"
+            params.append(1 if starred else 0)
         return self.db.execute(sql, params).fetchone()[0]
 
     # -- keeping and losing things ----------------------------------------
 
-    def pin(self, entry_id: int, pinned: bool = True) -> None:
-        self.db.execute("UPDATE entry SET pinned = ? WHERE id = ?",
-                        (1 if pinned else 0, entry_id))
+    def star(self, entry_id: int, starred: bool = True) -> None:
+        """Keep this one. A star is a bookmark, not a move: it stays where it is."""
+        self.db.execute("UPDATE entry SET starred = ? WHERE id = ?",
+                        (1 if starred else 0, entry_id))
 
     def delete(self, entry_id: int) -> None:
         """Hide it now; the bytes stay until `purge`, so undo is always possible."""
@@ -336,7 +388,7 @@ class Store:
         cutoff = self._clock() - after_ms
         rows = self.db.execute(
             "SELECT id, sha256 FROM entry"
-            " WHERE deleted_at_ms IS NOT NULL AND deleted_at_ms < ? AND pinned = 0",
+            " WHERE deleted_at_ms IS NOT NULL AND deleted_at_ms < ? AND starred = 0",
             (cutoff,)).fetchall()
         for row in rows:
             self._forget(row["id"], row["sha256"])
@@ -394,9 +446,9 @@ def _entry(row: sqlite3.Row) -> Entry:
                  mime=row["mime"], source=row["source"], path=row["path"],
                  bytes=row["bytes"], first_seen_ms=row["first_seen_ms"],
                  last_seen_ms=row["last_seen_ms"], times_seen=row["times_seen"],
-                 pinned=bool(row["pinned"]), deleted_at_ms=row["deleted_at_ms"],
+                 starred=bool(row["starred"]), deleted_at_ms=row["deleted_at_ms"],
                  time_approx=bool(row["time_approx"]),
-                 preview=row["preview"], text=row["text"])
+                 preview=row["preview"], text=row["text"], ocr_ms=row["ocr_ms"])
 
 
 def _text_of(data: bytes, kind: str) -> str:

@@ -247,24 +247,56 @@ def test_undo_with_nothing_to_undo_does_nothing(filled):
     assert [e.id for e in browse.entries()] == before
 
 
-def test_pinning_the_selection_sticks(filled):
+def test_starring_the_selection_sticks(filled):
     browse = Browse(filled)
-    browse.pin_selected()
-    assert browse.selected.pinned
+    browse.star_selected()
+    assert browse.selected.starred
 
 
-def test_pinning_twice_unpins(filled):
-    browse = Browse(filled)
-    browse.pin_selected()
-    browse.pin_selected()
-    assert not browse.selected.pinned
+def test_starring_twice_unstars(store):
+    store.add(b"one", "text/plain")
+    browse = Browse(store)
+    browse.star_selected()
+    assert browse.selected.starred
+    browse.star_selected()
+    assert not browse.selected.starred
+
+
+def test_the_starred_tab_holds_only_the_starred_ones(store):
+    store.add(b"passing through", "text/plain")
+    keeper = store.add(b"worth keeping", "text/plain")
+    browse = Browse(store)
+    browse.select(keeper.id)
+    browse.star_selected()
+
+    browse.set_mode("starred")
+    assert [e.id for e in browse.entries()] == [keeper.id]
+
+
+def test_a_starred_screenshot_is_in_the_starred_tab_too(store, tmp_path):
+    # The starred list is not one source's list. Anything you kept is in it.
+    shot = tmp_path / "shot.png"
+    shot.write_bytes(b"not really a png")
+    entry = store.add_file(shot, mime="image/png")
+    store.star(entry.id)
+
+    browse = Browse(store)
+    browse.set_mode("starred")
+    assert [e.id for e in browse.entries()] == [entry.id]
+
+
+def test_starring_leaves_the_entry_in_the_clipboard(store):
+    keeper = store.add(b"worth keeping", "text/plain")
+    browse = Browse(store)
+    browse.star_selected()
+    assert keeper.id in [e.id for e in browse.entries()]
 
 
 # -- what the modes are ----------------------------------------------------
 
 
-def test_the_modes_are_the_three_buttons_on_the_rail():
-    assert Browse.MODES == ("clipboard", "grid", "screenshots")
+def test_the_modes_are_the_buttons_on_the_rail():
+    assert Browse.MODES == ("clipboard", "grid", "screenshots", "starred")
 
 
 def test_a_mode_that_does_not_exist_is_refused(filled):

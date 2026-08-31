@@ -6,15 +6,20 @@ here and commit the result:
 
     python3 tools/make_sounds.py
 
-Both are the same shape — a sine with a quiet second harmonic under a fast
-exponential decay, and a few milliseconds of attack so the speaker is never
-asked to start at full amplitude, which is what a click is. Short, low, and
-pitched well above the desk noise: a cue, not a jingle.
+Opening makes a **click** — a few milliseconds of noise under a steep decay,
+the sound of a switch rather than of a notification. It happens every time a
+window appears, so it has to be the kind of sound you stop hearing.
+
+Copying makes one short **note**, because it is the thing you actually asked
+for and the only confirmation you get: a sine with a quiet second harmonic
+under a fast decay, with a few milliseconds of attack so the speaker is never
+asked to start at full amplitude.
 """
 
 from __future__ import annotations
 
 import math
+import random
 import struct
 import wave
 from pathlib import Path
@@ -25,6 +30,9 @@ OUT = Path(__file__).resolve().parent.parent / "src" / "magpie" / "assets"
 #: Quiet. This plays every time a window opens, and anything louder becomes
 #: the reason the sound gets turned off a week later.
 LEVEL = 0.22
+
+#: The click is quieter still, and it is the one you hear most.
+CLICK_LEVEL = 0.09
 
 
 def tone(start: float, end: float, seconds: float, decay: float,
@@ -46,6 +54,24 @@ def tone(start: float, end: float, seconds: float, decay: float,
     return out
 
 
+def click(seconds: float = 0.007, decay: float = 0.0013, hz: float = 2000.0) -> list[float]:
+    """A tick: noise and one high cycle, gone almost before it started.
+
+    The noise is what makes it read as a physical click rather than a beep;
+    the tone under it keeps it from sounding like a fault. Seeded, so the file
+    is the same every time this is run.
+    """
+    noise = random.Random(31)
+    frames = int(RATE * seconds)
+    out = []
+    for i in range(frames):
+        at = i / RATE
+        envelope = math.exp(-at / decay)
+        body = 0.7 * noise.uniform(-1.0, 1.0) + 0.3 * math.sin(2 * math.pi * hz * at)
+        out.append(body * envelope * CLICK_LEVEL)
+    return out
+
+
 def write(name: str, samples: list[float]) -> Path:
     path = OUT / f"{name}.wav"
     with wave.open(str(path), "wb") as wav:
@@ -60,8 +86,9 @@ def write(name: str, samples: list[float]) -> Path:
 
 def main() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
-    # Opening: a short rise, the sound of something coming towards you.
-    write("open", tone(523.25, 783.99, 0.11, decay=0.075))
+    # Opening: a click. The window is already there; this is only the edge of
+    # it arriving, and anything more is a jingle you will want gone by Friday.
+    write("open", click())
     # Copying: one note, landing. Higher and shorter, so it reads as "done"
     # rather than as another window appearing.
     write("copy", tone(987.77, 932.33, 0.07, decay=0.035, harmonic=0.3))

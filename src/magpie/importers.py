@@ -56,7 +56,7 @@ def import_noctalia(store: Store, root: Path | str = NOCTALIA) -> int:
         entry = store.add(data, record.get("data_mime_type") or "text/plain",
                           source="clipboard", at_ms=record.get("captured_at_ms"))
         if record.get("pinned"):
-            store.pin(entry.id)
+            store.star(entry.id)
         added += store.count() - before
     return added
 

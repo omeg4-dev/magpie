@@ -21,13 +21,19 @@ from __future__ import annotations
 
 from gi.repository import Gdk, Gtk
 
-__all__ = ["apply", "INK", "SLATE", "QUILL", "BONE", "ASH"]
+__all__ = ["apply", "INK", "SLATE", "QUILL", "BONE", "ASH", "RAIL", "PANE"]
 
 #: A magpie's back: near black, with enough blue in it that the greys above it
 #: read as cool rather than as dirt.
 INK = "#0F1016"
 SLATE = "#171922"
 QUILL = "#242737"
+
+#: The window is three things side by side — what you can do, what there is,
+#: and what you have got — and they should not read as one flat sheet. So the
+#: rail sits below the list and the pane sits above it, a step either way.
+RAIL = "#090A0E"
+PANE = "#191C27"
 #: The belly. Warm, so it does not glare against the ink at two in the morning.
 BONE = "#E9E7E2"
 ASH = "#878A9C"
@@ -47,8 +53,8 @@ window.magpie {{
 /* ── the rail ─────────────────────────────────────────────────────────── */
 
 .rail {{
-  background: {INK};
-  border-right: 1px solid {QUILL};
+  background: {RAIL};
+  border-right: 1px solid #1F2231;
   padding: 10px 0;
 }}
 .rail button {{
@@ -128,6 +134,7 @@ window.magpie {{
 /* ── the list ─────────────────────────────────────────────────────────── */
 
 .list {{ background: {INK}; padding: 0 6px; }}
+.gallery {{ background: {INK}; }}
 /* A pill, not a ruled line. Rows are things, and things have edges. */
 .list > row {{
   background: transparent;
@@ -158,12 +165,14 @@ window.magpie {{
   margin-right: 11px;
 }}
 
-.pin {{ font-family: {MONO}; color: #D8B45C; font-size: 10px; }}
+/* The star is the one warm thing in here, and it means exactly one thing:
+   you said to keep this. */
+.star {{ font-family: {MONO}; color: #D8B45C; font-size: 10px; }}
 .approx {{ color: {ASH}; font-style: italic; }}
 
 /* ── the preview ──────────────────────────────────────────────────────── */
 
-.preview {{ background: {SLATE}; border-left: 1px solid {QUILL}; }}
+.preview {{ background: {PANE}; border-left: 1px solid #262A3A; }}
 .preview-text {{
   font-family: {MONO};
   font-size: 12.5px;
@@ -174,17 +183,25 @@ window.magpie {{
 .preview-image {{ padding: 18px; }}
 .preview scrolledwindow {{ background: transparent; }}
 
-.facts {{
+.facts {{ padding: 4px 18px 12px 18px; }}
+/* The lead line is the one you read at a glance — the size of the picture,
+   what it is, how big the file is. The rest is there when you look for it. */
+.fact-lead {{
   font-family: {SANS};
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: {BONE};
+}}
+.fact {{
+  font-family: {MONO};
   font-size: 10px;
-  letter-spacing: 0.07em;
   color: {ASH};
-  padding: 0 18px 10px 18px;
 }}
 
 .actions {{
-  background: {INK};
-  border-top: 1px solid {QUILL};
+  background: #14161F;
+  border-top: 1px solid #262A3A;
   padding: 10px 14px;
 }}
 .actions > flowboxchild {{ padding: 0; background: transparent; }}

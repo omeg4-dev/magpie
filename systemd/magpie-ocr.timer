@@ -1,0 +1,10 @@
+[Unit]
+Description=Read new pictures now and then
+
+[Timer]
+OnStartupSec=5min
+OnUnitInactiveSec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

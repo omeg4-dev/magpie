@@ -25,12 +25,51 @@ KEEP_PREVIEWS = 12
 #: at 600 pixels is most of the pause you feel when you press Down.
 PREVIEW_SIZE = 1400
 
+#: Enough of a file for its header. Every format worth showing puts its size
+#: in the first few bytes.
+HEADER = 65_536
+
 
 class Thumbs:
     def __init__(self, store) -> None:
         self._store = store
         self._stamps: dict[tuple, Gdk.Texture | None] = {}
         self._previews: dict[int, Gdk.Texture | None] = {}
+        self._sizes: dict[int, tuple[int, int] | None] = {}
+
+    def dimensions(self, entry) -> tuple[int, int] | None:
+        """How big the picture really is, without decoding all of it.
+
+        The preview is decoded no larger than it is shown, so its texture
+        cannot answer this — and "1920 × 1080" is the first thing anyone wants
+        to know about a screenshot.
+        """
+        if entry.id not in self._sizes:
+            self._sizes[entry.id] = self._measure(entry)
+        return self._sizes[entry.id]
+
+    def _measure(self, entry) -> tuple[int, int] | None:
+        if entry.path:
+            # Reads the header and stops. Free, next to opening the file.
+            info = GdkPixbuf.Pixbuf.get_file_info(entry.path)
+            if info and info[0] is not None:
+                return (info[1], info[2])
+            return None
+        try:
+            data = self._store.payload(entry)
+        except OSError:
+            return None
+        found: list[tuple[int, int]] = []
+        loader = GdkPixbuf.PixbufLoader()
+        loader.connect("size-prepared", lambda _l, w, h: found.append((w, h)))
+        try:
+            # The header is in the first few kilobytes; closing on a truncated
+            # file raises, which is exactly what we want it to do.
+            loader.write(data[:HEADER])
+            loader.close()
+        except GLib.Error:
+            pass
+        return found[0] if found else None
 
     def preview(self, entry) -> Gdk.Texture | None:
         """The image for the detail pane, decoded no larger than it is shown."""

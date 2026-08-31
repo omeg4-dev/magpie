@@ -161,24 +161,6 @@ def test_purging_takes_the_bytes_with_it(store, clock):
     assert list((store.root / "blobs").rglob("*.bin")) == []
 
 
-def test_a_pinned_entry_is_never_purged(store, clock):
-    entry = store.add(b"my licence key", "text/plain")
-    store.pin(entry.id)
-    store.delete(entry.id)
-    clock.advance(365 * 86_400_000)
-    store.purge(after_ms=30 * 86_400_000)
-
-    assert store.get(entry.id) is not None
-
-
-def test_pinned_entries_can_be_listed_on_their_own(store):
-    store.add(b"ordinary", "text/plain")
-    kept = store.add(b"important", "text/plain")
-    store.pin(kept.id)
-
-    assert [e.id for e in store.recent(pinned=True)] == [kept.id]
-
-
 # -- what an entry is ------------------------------------------------------
 
 
@@ -290,3 +272,103 @@ def test_counting_is_cheap_enough_to_show(store):
     for i in range(20):
         store.add(f"line {i}".encode(), "text/plain")
     assert store.count() == 20
+
+
+# -- starring ---------------------------------------------------------------
+
+
+def test_a_starred_entry_says_so(store):
+    entry = store.add(b"keep this", "text/plain")
+    store.star(entry.id)
+    assert store.get(entry.id).starred
+
+
+def test_starring_can_be_undone(store):
+    entry = store.add(b"keep this", "text/plain")
+    store.star(entry.id)
+    store.star(entry.id, False)
+    assert not store.get(entry.id).starred
+
+
+def test_the_starred_list_is_only_the_starred_ones(store):
+    kept = store.add(b"kept", "text/plain")
+    store.add(b"passing through", "text/plain")
+    store.star(kept.id)
+    assert [e.id for e in store.recent(starred=True)] == [kept.id]
+
+
+def test_starred_things_are_still_in_the_clipboard(store):
+    # Starring is a bookmark, not a move: the entry stays where it was.
+    kept = store.add(b"kept", "text/plain")
+    store.star(kept.id)
+    assert kept.id in [e.id for e in store.recent()]
+
+
+def test_searching_can_be_narrowed_to_the_starred_ones(store):
+    kept = store.add(b"alpha kept", "text/plain")
+    store.add(b"alpha passing", "text/plain")
+    store.star(kept.id)
+    assert [e.id for e in store.search("alpha", starred=True)] == [kept.id]
+
+
+def test_a_starred_entry_survives_the_purge(store, clock):
+    entry = store.add(b"keep this", "text/plain")
+    store.star(entry.id)
+    store.delete(entry.id)
+    clock.advance(60 * 86_400_000)
+    store.purge()
+    assert store.get(entry.id) is not None
+
+
+def test_a_store_written_before_the_rename_still_opens(tmp_path):
+    # The column was called `pinned` for the first few weeks. Losing a
+    # clipboard to a renamed column would be an absurd way to lose one.
+    import sqlite3
+
+    from magpie.store import Store
+
+    Store(tmp_path)  # make it, then put it back the way it was
+    db = sqlite3.connect(tmp_path / "magpie.db", isolation_level=None)
+    db.execute("ALTER TABLE entry RENAME COLUMN starred TO pinned")
+    db.execute("INSERT INTO entry (key, sha256, kind, mime, source, bytes,"
+               " first_seen_ms, last_seen_ms, pinned, preview)"
+               " VALUES ('k','s','text','text/plain','clipboard',1,1,1,1,'old')")
+    db.close()
+
+    store = Store(tmp_path)
+    assert store.recent()[0].starred
+
+
+# -- what still needs reading ------------------------------------------------
+
+
+def test_images_are_offered_up_for_reading(store, png):
+    image = store.add(png, "image/png")
+    store.add(b"words already", "text/plain")
+    assert [e.id for e in store.unread_images()] == [image.id]
+
+
+def test_an_image_that_has_been_read_is_not_offered_again(store, png):
+    image = store.add(png, "image/png")
+    store.set_ocr(image.id, "some words")
+    assert store.unread_images() == []
+
+
+def test_an_image_with_nothing_in_it_is_not_offered_again_either(store, png):
+    # Most screenshots of a video have no text in them at all. Reading one
+    # every hour for ever is how a background job becomes a space heater.
+    image = store.add(png, "image/png")
+    store.set_ocr(image.id, "")
+    assert store.unread_images() == []
+
+
+def test_what_was_read_can_be_searched_for(store, png):
+    image = store.add(png, "image/png")
+    store.set_ocr(image.id, "invoice from the electricity people")
+    assert [e.id for e in store.search("electricity")] == [image.id]
+
+
+def test_the_newest_images_are_read_first(store, png):
+    old = store.add(png, "image/png", at_ms=1_000)
+    new = store.add(png + b"\x00", "image/png", at_ms=2_000)
+    assert [e.id for e in store.unread_images()] == [new.id, old.id]

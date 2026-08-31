@@ -16,11 +16,32 @@ def test_both_sounds_ship_with_the_program():
         assert sounds.file(name).exists(), f"{name}.wav is missing"
 
 
-def test_they_are_short_enough_to_be_a_cue_rather_than_a_jingle():
+def test_opening_is_a_click_rather_than_a_sound():
+    # It happens every time a window appears. Past about twenty milliseconds
+    # it stops being the edge of something arriving and starts being a noise.
+    assert 0.002 < _seconds("open") < 0.02
+
+
+def test_copying_is_one_short_note():
+    assert 0.02 < _seconds("copy") < 0.15
+
+
+def test_neither_of_them_is_loud():
     for name in ("open", "copy"):
-        with wave.open(str(sounds.file(name))) as wav:
-            seconds = wav.getnframes() / wav.getframerate()
-            assert 0.02 < seconds < 0.35, f"{name} is {seconds:.2f}s"
+        assert _peak(name) < 0.3, f"{name} peaks at {_peak(name):.2f} of full scale"
+
+
+def _seconds(name: str) -> float:
+    with wave.open(str(sounds.file(name))) as wav:
+        return wav.getnframes() / wav.getframerate()
+
+
+def _peak(name: str) -> float:
+    import array
+
+    with wave.open(str(sounds.file(name))) as wav:
+        samples = array.array("h", wav.readframes(wav.getnframes()))
+    return max(abs(s) for s in samples) / 32767
 
 
 def test_playing_hands_the_file_to_the_player():

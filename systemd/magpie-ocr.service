@@ -1,0 +1,19 @@
+[Unit]
+# Reads the words off pictures so the screenshot folder can be searched. It
+# runs to the end of the backlog and stops; the timer brings it back for
+# whatever has been taken since.
+Description=Read the words off magpie's pictures
+PartOf=default.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/magpie ocr
+# The lowest priority there is, for both CPU and disk. This is thousands of
+# seconds of work that nobody is waiting for, and it must never be the reason
+# something else stutters.
+Nice=19
+CPUSchedulingPolicy=idle
+IOSchedulingClass=idle
+
+[Install]
+WantedBy=default.target

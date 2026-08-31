@@ -19,12 +19,15 @@ __all__ = ["Browse"]
 
 #: What each mode asks the store for. `None` means "do not narrow on this".
 MODE_FILTERS = {
-    "clipboard": {"source": "clipboard", "kind": None},
+    "clipboard": {"source": "clipboard", "kind": None, "starred": None},
     # The grid is the same history seen denser — text as well as pictures, so
     # you can take in far more of it at a glance. Not an image gallery: a grid
     # of only the images hides most of what you ever copied.
-    "grid": {"source": "clipboard", "kind": None},
-    "screenshots": {"source": "screenshot", "kind": None},
+    "grid": {"source": "clipboard", "kind": None, "starred": None},
+    "screenshots": {"source": "screenshot", "kind": None, "starred": None},
+    # Not a source of its own: anything you starred, wherever it came from. A
+    # kept screenshot belongs in the same pile as a kept licence key.
+    "starred": {"source": None, "kind": None, "starred": True},
 }
 
 #: Modes that open on their newest month rather than on everything. The
@@ -35,7 +38,7 @@ BY_MONTH = ("screenshots",)
 
 
 class Browse:
-    MODES = ("clipboard", "grid", "screenshots")
+    MODES = ("clipboard", "grid", "screenshots", "starred")
 
     def __init__(self, store: Store, limit: int = 2000) -> None:
         self._store = store
@@ -83,6 +86,12 @@ class Browse:
             **MODE_FILTERS[self.mode])
         self._at = next((i for i, e in enumerate(self._entries) if e.id == was), 0)
 
+    def total(self) -> int:
+        """How many entries this mode has in it altogether, filter aside."""
+        filters = MODE_FILTERS[self.mode]
+        return self._store.count(source=filters["source"],
+                                 starred=filters["starred"])
+
     def months(self) -> list[Month]:
         """The months there are to choose from, in this mode. Newest first."""
         return self._store.months(source=MODE_FILTERS[self.mode]["source"])
@@ -129,11 +138,11 @@ class Browse:
 
     # -- the buttons in the preview pane -----------------------------------
 
-    def pin_selected(self) -> None:
+    def star_selected(self) -> None:
         entry = self.selected
         if entry is None:
             return
-        self._store.pin(entry.id, not entry.pinned)
+        self._store.star(entry.id, not entry.starred)
         self.reload()
 
     def delete_selected(self) -> None:

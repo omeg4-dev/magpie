@@ -21,9 +21,10 @@ __all__ = ["main"]
 USAGE = """\
 magpie — the clipboard, remembered
 
-  magpie view [--mode M]  open the window (Super+V); M is clipboard|grid|screenshots
+  magpie view [--mode M]  open the window (Super+V); M is clipboard|grid|screenshots|starred
   magpie store            take stdin as a clipboard entry (for wl-paste --watch)
   magpie sync             import Noctalia's history and index new screenshots
+  magpie ocr [n]          read the words off pictures nobody has read yet
   magpie recover          one-off: recover the cliphist run that came before
   magpie recent [n]       what is at the top of the clipboard
   magpie search <query>   find clipboard entries by their words
@@ -81,6 +82,47 @@ def cmd_sync(config: Config, argv: list[str]) -> int:
     purged = store.purge(after_ms=config.purge_days * 86_400_000)
     print(f"{from_noctalia} from noctalia, {shots} screenshots, "
           f"{missing} gone from disk, {purged} purged")
+    return 0
+
+
+def cmd_ocr(config: Config, argv: list[str]) -> int:
+    """Read the words off every picture that has not been read yet.
+
+    Slow on purpose — see `ocr.py` — and interruptible: each picture is written
+    as it is finished, so stopping this halfway loses nothing but the one it
+    was on. `magpie-ocr.timer` runs it nicely in the background.
+    """
+    import os
+    from concurrent.futures import ThreadPoolExecutor
+
+    from . import ocr
+
+    store = _store(config)
+    waiting = store.unread_images(limit=int(argv[0]) if argv else 5_000)
+    # One thread each, several at a time. Tesseract parallelises one picture
+    # badly and several pictures perfectly, and the whole job is nice'd into
+    # the background anyway.
+    os.environ["OMP_THREAD_LIMIT"] = "1"
+    workers = max(1, (os.cpu_count() or 4) // 2)
+
+    def one(entry):
+        try:
+            return entry, ocr.read(store.payload(entry))
+        except OSError:
+            return entry, None  # the file moved; try again next time
+
+    read = words = 0
+    # Written as each one finishes, so stopping this halfway loses only the
+    # picture it was on.
+    with ThreadPoolExecutor(workers) as pool:
+        for entry, text in pool.map(one, waiting):
+            if text is None:
+                continue
+            store.set_ocr(entry.id, text)
+            read += 1
+            words += len(text.split())
+    print(f"{read} pictures read, {words} words found, "
+          f"{len(store.unread_images(limit=10**9))} still waiting")
     return 0
 
 
@@ -147,7 +189,7 @@ def cmd_purge(config: Config, argv: list[str]) -> int:
 def _line(entry) -> None:
     from datetime import datetime
 
-    mark = "*" if entry.pinned else " "
+    mark = "*" if entry.starred else " "
     # A reconstructed time is shown with a ~, because it was worked out from
     # the entries around it rather than measured.
     when = datetime.fromtimestamp(entry.last_seen_ms / 1000).strftime("%d %b %H:%M")
@@ -159,6 +201,7 @@ COMMANDS = {
     "view": cmd_view,
     "store": cmd_store,
     "sync": cmd_sync,
+    "ocr": cmd_ocr,
     "recover": cmd_recover,
     "recent": cmd_recent,
     "search": cmd_search,

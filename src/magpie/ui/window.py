@@ -33,6 +33,7 @@ from gi.repository import Gdk, Gio, GLib, GObject, Gtk, Pango
 
 from .. import sounds
 from ..browse import Browse
+from ..facts import lines as facts_for
 from ..paste import to_clipboard
 from ..shape import to_tile
 from ..store import Entry
@@ -48,9 +49,15 @@ MODE_ICONS = {
     "clipboard": ("\uf0ea", "Clipboard"),       # nf-fa-clipboard
     "grid": ("\uf009", "Grid"),                 # nf-fa-th_large
     "screenshots": ("\uf030", "Screenshots"),   # nf-fa-camera
+    "starred": ("\uf005", "Starred"),           # nf-fa-star
 }
 CLOSE_ICON = "\uf00d"   # nf-fa-times
-PIN_ICON = "\uf08d"     # nf-fa-thumb_tack
+STAR_ICON = "\uf005"    # nf-fa-star
+
+#: The modes drawn as a grid of cards rather than as a list. Starred is a list
+#: because it is a mixed pile — a kept screenshot next to a kept licence key —
+#: and a list is what you read a mixed pile in.
+AS_TILES = ("grid", "screenshots")
 
 #: The little picture on a list row, cropped to exactly this so every row in
 #: the column is the same shape.
@@ -82,6 +89,10 @@ WIDTH, HEIGHT = 1040, 690
 #: over before you could have read anything in it.
 APPEAR_MS = 105
 RISE = 8
+
+#: How many lines the facts block can hold: what it is, when, the file, the
+#: folder, and what was read off it.
+FACT_LINES = 5
 
 #: How long the filter box waits before it asks. Typing six characters used to
 #: mean six searches and six rebuilds; at this delay a normal burst of typing
@@ -236,15 +247,23 @@ class Window(Gtk.Window):
         self.preview_slot = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, vexpand=True)
         pane.append(self.preview_slot)
 
-        self.facts = Gtk.Label(xalign=0)
+        # A block, not a line. One line was enough for a copied string and no
+        # use for a picture: it ran out exactly where the filename began.
+        self.facts = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
         self.facts.add_css_class("facts")
-        # END, not MIDDLE: a middle ellipsis ate the mime type and the size,
-        # which are the short facts worth reading. The long one is the path.
-        self.facts.set_ellipsize(Pango.EllipsizeMode.END)
-        # An ellipsised label still asks for the width of its whole string, and
-        # a screenshot's path is a long string: without this the window grows
-        # to fit the file name of whatever you happen to have selected.
-        self.facts.set_max_width_chars(1)
+        self._fact_lines = []
+        for at in range(FACT_LINES):
+            label = Gtk.Label(xalign=0)
+            label.add_css_class("fact-lead" if at == 0 else "fact")
+            # END, not MIDDLE: a middle ellipsis ate the type and the size,
+            # which are the short facts worth reading.
+            label.set_ellipsize(Pango.EllipsizeMode.END)
+            # An ellipsised label still asks for the width of its whole
+            # string, and a screenshot's path is a long string: without this
+            # the window grows to fit whatever you happen to have selected.
+            label.set_max_width_chars(1)
+            self._fact_lines.append(label)
+            self.facts.append(label)
         pane.append(self.facts)
 
         pane.append(self._build_actions())
@@ -261,13 +280,13 @@ class Window(Gtk.Window):
         bar.set_row_spacing(8)
 
         self.copy_button = _button("Copy", self.copy_and_close, "primary")
-        self.pin_button = _button("Pin", self._pin)
+        self.star_button = _button("Star", self._star)
         self.popout_button = _button("Pop out", self._popout)
         self.open_button = _button("Open", self._open)
         self.reveal_button = _button("Show in files", self._reveal)
         delete = _button("Delete", self._delete, "danger")
 
-        for widget in (self.copy_button, self.pin_button, self.popout_button,
+        for widget in (self.copy_button, self.star_button, self.popout_button,
                        self.open_button, self.reveal_button, delete):
             bar.append(widget)
         return bar
@@ -372,7 +391,7 @@ class Window(Gtk.Window):
     @property
     def _pictures(self) -> bool:
         """Whether the left side is the grid rather than the list."""
-        return self.browse.mode != "clipboard"
+        return self.browse.mode in AS_TILES
 
     @property
     def _view(self) -> Gtk.Widget:
@@ -467,11 +486,11 @@ class Window(Gtk.Window):
                                        for at, e in enumerate(entries)))
 
     def _say_how_many(self, entries: list[Entry]) -> None:
-        source = "screenshot" if self.browse.mode == "screenshots" else "clipboard"
         # Counted once per opening rather than once per keystroke.
-        if source not in self._totals:
-            self._totals[source] = self.store.count(source=source)
-        total = self._totals[source]
+        mode = self.browse.mode
+        if mode not in self._totals:
+            self._totals[mode] = self.browse.total()
+        total = self._totals[mode]
         if self.browse.query:
             self.count.set_text(f"{len(entries)} of {total}")
         elif self.browse.month:
@@ -487,7 +506,7 @@ class Window(Gtk.Window):
         at = self.browse.position
         if at is None:
             self._show_preview(_empty_state(self.browse))
-            self.facts.set_text("")
+            self._say_facts(None)
             self._enable_actions(None)
             return
 
@@ -517,10 +536,17 @@ class Window(Gtk.Window):
 
     def _show_entry(self, entry: Entry) -> None:
         # The cheap half is immediate; only the picture waits.
-        self.facts.set_text(_facts(entry))
+        self._say_facts(entry)
         self._enable_actions(entry)
-        self.pin_button.set_label("Unpin" if entry.pinned else "Pin")
+        self.star_button.set_label("Unstar" if entry.starred else "Star")
         self._preview_soon(entry)
+
+    def _say_facts(self, entry: Entry | None) -> None:
+        said = [] if entry is None else facts_for(
+            entry, self.thumbs.dimensions(entry) if entry.is_image else None)
+        for label, text in zip(self._fact_lines, said + [""] * FACT_LINES):
+            label.set_text(text)
+            label.set_visible(bool(text))
 
     def _preview_soon(self, entry: Entry) -> None:
         """Draw the preview when the selection stops moving.
@@ -572,7 +598,7 @@ class Window(Gtk.Window):
     def _enable_actions(self, entry: Entry | None) -> None:
         has = entry is not None
         self.copy_button.set_sensitive(has)
-        self.pin_button.set_sensitive(has)
+        self.star_button.set_sensitive(has)
         # Pop out is for looking at a picture properly; there is nothing in a
         # line of text the preview is not already showing.
         self.popout_button.set_visible(has and entry.is_image)
@@ -588,8 +614,8 @@ class Window(Gtk.Window):
             sounds.play("copy", self._player)
             self.close()
 
-    def _pin(self) -> None:
-        self.browse.pin_selected()
+    def _star(self) -> None:
+        self.browse.star_selected()
         self.refresh(reselect=False)
         self.filter.grab_focus_without_selecting()
 
@@ -701,9 +727,9 @@ class Row(Card):
 
     Kept deliberately thin. A list view holds a couple of hundred of these
     ready around wherever you are looking, so every widget in here is paid for
-    two hundred times on every rebuild — which is why the picture and the pin
-    are only built for the rows that actually have one, and why the whole
-    second line is a single label rather than a box of three.
+    two hundred times on every rebuild — which is why the picture is only
+    built for the rows that actually have one, and why the whole second line
+    is a single label rather than a box of three.
     """
 
     __gtype_name__ = "MagpieRow"
@@ -735,7 +761,13 @@ class Row(Card):
         self._picture(entry, thumbs, (STAMP_W, STAMP_H), self._show_stamp)
 
         self.text.set_text(entry.preview)
-        self.meta.set_text(_meta(entry))
+        # Markup only for the starred ones, so the star is gold and the time
+        # beside it is not. Parsing markup on every row of a list this long is
+        # not worth it for the ninety-nine that have no star.
+        if entry.starred:
+            self.meta.set_markup(_meta_markup(entry))
+        else:
+            self.meta.set_text(_meta(entry))
         _approximate(self.meta, entry.time_approx)
 
     def _show_stamp(self, texture) -> None:
@@ -829,6 +861,15 @@ def _empty_state(browse: Browse) -> Gtk.Widget:
     return _message("Nothing here yet", "Copy something and it will appear.")
 
 
+def _wrapping(label: Gtk.Label, style: str) -> Gtk.Label:
+    """A line that fits the pane it is in, however narrow that pane is."""
+    label.add_css_class(style)
+    label.set_wrap(True)
+    label.set_justify(Gtk.Justification.CENTER)
+    label.set_max_width_chars(28)
+    return label
+
+
 def _loose(widget: Gtk.Widget) -> Gtk.Widget:
     """Let this be as big as it likes without the window growing to suit it."""
     scroller = Gtk.ScrolledWindow(vexpand=True)
@@ -839,10 +880,8 @@ def _loose(widget: Gtk.Widget) -> Gtk.Widget:
 def _message(title: str, hint: str) -> Gtk.Widget:
     box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6,
                   vexpand=True, valign=Gtk.Align.CENTER, halign=Gtk.Align.CENTER)
-    heading = Gtk.Label(label=title)
-    heading.add_css_class("empty")
-    detail = Gtk.Label(label=hint)
-    detail.add_css_class("empty-hint")
+    heading = _wrapping(Gtk.Label(label=title), "empty")
+    detail = _wrapping(Gtk.Label(label=hint), "empty-hint")
     box.append(heading)
     box.append(detail)
     return box
@@ -851,14 +890,25 @@ def _message(title: str, hint: str) -> Gtk.Widget:
 # -- words ------------------------------------------------------------------
 
 
+#: The one warm colour in the window, and it means exactly one thing.
+GOLD = "#D8B45C"
+
+
 def _meta(entry: Entry) -> str:
-    """The second line of a row: when, how often, and whether it is kept."""
+    """The second line of a row: when, and how often."""
     bits = [_when(entry)]
     if entry.times_seen > 1:
         bits.append(f"\u00d7{entry.times_seen}")
-    if entry.pinned:
-        bits.append(PIN_ICON)
     return "   ".join(bits)
+
+
+def _meta_markup(entry: Entry) -> str:
+    """The same line, with the star on the end of it in gold."""
+    # The family is named again here: the glyph is a private-use codepoint
+    # that only the Nerd Font has, and the meta line is otherwise set in Plex.
+    return (GLib.markup_escape_text(_meta(entry))
+            + f'   <span font_family="FiraCode Nerd Font Mono"'
+              f' foreground="{GOLD}">{STAR_ICON}</span>')
 
 
 def _approximate(label: Gtk.Label, approx: bool) -> None:
@@ -887,26 +937,6 @@ def _when(entry: Entry) -> str:
     else:
         text = when.strftime("%d %b %Y").upper()
     return ("~" + text) if entry.time_approx else text
-
-
-def _facts(entry: Entry) -> str:
-    when = datetime.fromtimestamp(entry.first_seen_ms / 1000)
-    bits = [when.strftime("%d %B %Y, %H:%M"), entry.mime, _size(entry.bytes)]
-    if entry.time_approx:
-        bits[0] += " (reconstructed)"
-    if entry.times_seen > 1:
-        bits.append(f"copied {entry.times_seen} times")
-    if entry.path:
-        bits.append(entry.path)
-    return "   ·   ".join(bits)
-
-
-def _size(size: int) -> str:
-    for unit in ("B", "kB", "MB", "GB"):
-        if size < 1024 or unit == "GB":
-            return f"{size:.0f} {unit}" if unit == "B" else f"{size:.1f} {unit}"
-        size /= 1024.0
-    return f"{size} B"
 
 
 def _button(label: str, on_click, *classes: str) -> Gtk.Button:
