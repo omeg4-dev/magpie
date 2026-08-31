@@ -167,3 +167,29 @@ def test_a_missing_language_is_dropped_rather_than_fatal():
 
 def test_english_is_asked_for_even_if_nothing_is_installed():
     assert ocr.languages(installed=lambda: set()) == "eng"
+
+
+# -- reading a picture the moment it is copied -------------------------------
+
+
+def test_it_asks_for_one_picture_by_id():
+    said = []
+    ocr.read_later(41, run=said.append)
+    argv, = said
+    assert argv[-2:] == ["ocr-one", "41"]
+
+
+def test_the_reading_is_nice_to_whatever_you_are_doing():
+    # It happens while you are still working in the window you copied from.
+    said = []
+    ocr.read_later(41, run=said.append)
+    assert said[0][:1] == ["nice"]
+
+
+def test_a_reading_that_cannot_be_started_is_not_an_error():
+    # The clipboard entry is already stored; failing to read it is a missing
+    # convenience, not a lost copy, and `magpie store` must still exit 0.
+    def broken(_argv):
+        raise OSError("no such file")
+
+    ocr.read_later(41, run=broken)

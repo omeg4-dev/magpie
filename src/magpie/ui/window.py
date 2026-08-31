@@ -208,7 +208,7 @@ class Window(Gtk.Window):
         self.selection.connect("selection-changed", self._on_selected)
 
         self.list = Gtk.ListView(model=self.selection,
-                                 factory=self._factory(Row))
+                                 factory=self._factory(lambda: Row(self._star_row)))
         self.list.add_css_class("list")
 
         self.grid = Gtk.GridView(model=self.selection,
@@ -656,6 +656,12 @@ class Window(Gtk.Window):
             sounds.play("copy", self._player)
             self.close()
 
+    def _star_row(self, entry_id: int) -> None:
+        """The star on a row: that one, whatever the arrows are pointing at."""
+        self.browse.star(entry_id)
+        self.refresh(reselect=False)
+        self.filter.grab_focus_without_selecting()
+
     def _star(self) -> None:
         self.browse.star_selected()
         self.refresh(reselect=False)
@@ -776,12 +782,15 @@ class Row(Card):
 
     __gtype_name__ = "MagpieRow"
 
-    def __init__(self) -> None:
+    def __init__(self, on_star=None) -> None:
         super().__init__(Gtk.Orientation.HORIZONTAL)
         self.add_css_class("row-body")
         self.stamp: Gtk.Picture | None = None
+        self._on_star = on_star
+        self._entry_id: int | None = None
+        self._starred = False
 
-        body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, hexpand=True)
+        body = self.body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, hexpand=True)
         self.text = Gtk.Label(xalign=0)
         self.text.add_css_class("row-text")
         self.text.set_ellipsize(Pango.EllipsizeMode.END)
@@ -797,20 +806,56 @@ class Row(Card):
 
         self.append(body)
 
+        # A label and a click, not a Gtk.Button: two hundred rows exist at any
+        # moment, and a button is several widgets and a page of CSS for
+        # something that is one glyph.
+        self.star = Gtk.Label(label=STAR_OUTLINE)
+        self.star.add_css_class("row-star")
+        self.star.set_valign(Gtk.Align.CENTER)
+        self.star.set_opacity(0)
+        self.append(self.star)
+        click = Gtk.GestureClick()
+        click.connect("pressed", self._star_pressed)
+        self.star.add_controller(click)
+
+        # The star is an offer while you are pointing at the row and a fact
+        # once you have taken it: it fades in under the pointer, and stays on
+        # the rows you kept. It holds its place in the layout either way — a
+        # star that took up room only sometimes would shift the text of every
+        # row you pointed at.
+        self.motion = Gtk.EventControllerMotion()
+        self.motion.connect("enter", lambda *_a: self._hover(True))
+        self.motion.connect("leave", lambda *_a: self._hover(False))
+        self.add_controller(self.motion)
+
     def show_entry(self, entry: Entry, thumbs: Thumbs) -> None:
         # An image row shows the image. "PNG image · 75.4 kB" is the size of
         # something you still cannot see, which is no help at all in choosing.
         self._picture(entry, thumbs, (STAMP_W, STAMP_H), self._show_stamp)
 
         self.text.set_text(entry.preview)
-        # Markup only for the starred ones, so the star is gold and the time
-        # beside it is not. Parsing markup on every row of a list this long is
-        # not worth it for the ninety-nine that have no star.
-        if entry.starred:
-            self.meta.set_markup(_meta_markup(entry))
-        else:
-            self.meta.set_text(_meta(entry))
+        self.meta.set_text(_meta(entry))
         _approximate(self.meta, entry.time_approx)
+
+        self._entry_id = entry.id
+        self._starred = entry.starred
+        self.star.set_label(STAR_ICON if entry.starred else STAR_OUTLINE)
+        if entry.starred:
+            self.star.add_css_class("on")
+        else:
+            self.star.remove_css_class("on")
+        # A recycled row: ask where the pointer is rather than remembering.
+        # Scrolling with the pointer over the list rebinds rows underneath it,
+        # and enter and leave do not come in pairs when that happens.
+        self._hover(self.motion.contains_pointer())
+
+    def _hover(self, over: bool) -> None:
+        self.star.set_opacity(1 if (over or self._starred) else 0)
+
+    def _star_pressed(self, gesture, *_args) -> None:
+        gesture.set_state(Gtk.EventSequenceState.CLAIMED)
+        if self._on_star is not None and self._entry_id is not None:
+            self._on_star(self._entry_id)
 
     def _show_stamp(self, texture) -> None:
         if texture is None and self.stamp is None:
@@ -820,7 +865,9 @@ class Row(Card):
             self.stamp.add_css_class("stamp")
             self.stamp.set_size_request(STAMP_W, STAMP_H)
             self.stamp.set_valign(Gtk.Align.CENTER)
-            self.prepend(self.stamp)
+            # After the words and before the star: the star wants the same
+            # spot on every row, picture or no picture.
+            self.insert_child_after(self.stamp, self.body)
         self.stamp.set_paintable(texture)
         self.stamp.set_visible(texture is not None)
 
@@ -932,25 +979,12 @@ def _message(title: str, hint: str) -> Gtk.Widget:
 # -- words ------------------------------------------------------------------
 
 
-#: The one warm colour in the window, and it means exactly one thing.
-GOLD = "#D8B45C"
-
-
 def _meta(entry: Entry) -> str:
     """The second line of a row: when, and how often."""
     bits = [_when(entry)]
     if entry.times_seen > 1:
         bits.append(f"\u00d7{entry.times_seen}")
     return "   ".join(bits)
-
-
-def _meta_markup(entry: Entry) -> str:
-    """The same line, with the star on the end of it in gold."""
-    # The family is named again here: the glyph is a private-use codepoint
-    # that only the Nerd Font has, and the meta line is otherwise set in Plex.
-    return (GLib.markup_escape_text(_meta(entry))
-            + f'   <span font_family="FiraCode Nerd Font Mono"'
-              f' foreground="{GOLD}">{STAR_ICON}</span>')
 
 
 def _approximate(label: Gtk.Label, approx: bool) -> None:

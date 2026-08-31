@@ -30,9 +30,10 @@ from __future__ import annotations
 
 import re
 import subprocess
+import sys
 from functools import lru_cache
 
-__all__ = ["read", "clean", "score", "languages"]
+__all__ = ["read", "clean", "score", "languages", "read_later"]
 
 #: Both, in one pass. This clipboard is half German and tesseract is perfectly
 #: happy to be given two dictionaries at once — but only if they are installed,
@@ -89,6 +90,28 @@ def _run(argv: list[str], data: bytes = b"") -> bytes:
     done = subprocess.run(argv, input=data, stdout=subprocess.PIPE,
                           stderr=subprocess.DEVNULL, timeout=TIMEOUT)
     return done.stdout
+
+
+def _spawn(argv: list[str]) -> None:
+    subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                     start_new_session=True)
+
+
+def read_later(entry_id: int, run=_spawn) -> None:
+    """Read this picture in the background, now rather than on the hour.
+
+    A screenshot you just copied is the one you are most likely to search for
+    in the next minute, and waiting for the hourly job to come round means the
+    preview says "not read yet" about the only picture you care about. It is
+    nice'd because it happens while you are still working in the window you
+    copied from, and detached because `magpie store` is wl-paste's child and
+    must not hold the clipboard watcher open.
+    """
+    try:
+        run(["nice", "-n", "19", sys.executable, "-m", "magpie",
+             "ocr-one", str(entry_id)])
+    except OSError:
+        pass  # the copy is stored; the reading is a convenience
 
 
 def read(data: bytes, run=_run) -> str:

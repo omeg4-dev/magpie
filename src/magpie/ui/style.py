@@ -157,8 +157,19 @@ window.magpie {{
 .stamp {{
   border-radius: 8px;
   background: {p.quill};
-  margin-right: 11px;
+  margin-left: 11px;
 }}
+
+/* The star on a row. It is always here, holding its place; what changes is
+   whether you can see it. */
+.row-star {{
+  font-family: {MONO};
+  font-size: 12px;
+  color: {p.faint};
+  padding: 0 4px 0 12px;
+}}
+.row-star.on {{ color: {p.gold}; }}
+.row-star:hover {{ color: {p.gold}; }}
 
 .approx {{ color: {p.ash}; font-style: italic; }}
 

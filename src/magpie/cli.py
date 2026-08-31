@@ -25,6 +25,7 @@ magpie — the clipboard, remembered
   magpie store            take stdin as a clipboard entry (for wl-paste --watch)
   magpie sync             import Noctalia's history and index new screenshots
   magpie ocr [n]          read the words off pictures nobody has read yet
+  magpie ocr-one <id>     read one picture now (spawned when you copy one)
   magpie recover          one-off: recover the cliphist run that came before
   magpie recent [n]       what is at the top of the clipboard
   magpie search <query>   find clipboard entries by their words
@@ -69,9 +70,18 @@ def cmd_store(config: Config, argv: list[str]) -> int:
     """Called once per clipboard change, with the content on stdin."""
     import os
 
+    from . import ocr
+
     data = sys.stdin.buffer.read()
     entry = capture(_store(config), data, os.environ.get("CLIPBOARD_STATE", "data"))
-    return 0 if entry is not None else 1
+    if entry is None:
+        return 1
+    # A picture you just copied is the one you are most likely to search for
+    # next, so it is read now rather than on the hour. Detached: this process
+    # is wl-paste's child and the next copy must not wait for tesseract.
+    if entry.is_image and not entry.read_yet:
+        ocr.read_later(entry.id)
+    return 0
 
 
 def cmd_sync(config: Config, argv: list[str]) -> int:
@@ -123,6 +133,25 @@ def cmd_ocr(config: Config, argv: list[str]) -> int:
             words += len(text.split())
     print(f"{read} pictures read, {words} words found, "
           f"{len(store.unread_images(limit=10**9))} still waiting")
+    return 0
+
+
+def cmd_ocr_one(config: Config, argv: list[str]) -> int:
+    """Read one picture, by id — what `magpie store` spawns for a fresh copy."""
+    from . import ocr
+
+    if not argv:
+        print("magpie ocr-one: which one?", file=sys.stderr)
+        return 2
+    store = _store(config)
+    entry = store.get(int(argv[0]))
+    if entry is None or not entry.is_image or entry.read_yet:
+        return 1
+    try:
+        text = ocr.read(store.payload(entry))
+    except OSError:
+        return 1  # the file moved; the hourly job will find it again
+    store.set_ocr(entry.id, text)
     return 0
 
 
@@ -202,6 +231,7 @@ COMMANDS = {
     "store": cmd_store,
     "sync": cmd_sync,
     "ocr": cmd_ocr,
+    "ocr-one": cmd_ocr_one,
     "recover": cmd_recover,
     "recent": cmd_recent,
     "search": cmd_search,

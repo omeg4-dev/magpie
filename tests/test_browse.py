@@ -319,3 +319,31 @@ def test_it_knows_where_the_selection_is_without_a_search(store):
 
 def test_the_position_of_nothing_is_nothing(store):
     assert Browse(store).position is None
+
+
+# -- starring a row you are not looking at ------------------------------------
+
+
+def test_a_row_can_be_starred_without_selecting_it(filled):
+    # The star now sits on the row itself, so it must act on the row under the
+    # pointer rather than on whatever the arrows last landed on.
+    browse = Browse(filled)
+    first, second = browse.entries()[:2]
+    browse.select(first.id)
+
+    browse.star(second.id)
+
+    assert browse.selected.id == first.id, "starring must not move the selection"
+    assert {e.id: e.starred for e in browse.entries()}[second.id] is True
+
+
+def test_starring_the_same_row_twice_takes_it_back(filled):
+    browse = Browse(filled)
+    entry = browse.entries()[0]
+    browse.star(entry.id)
+    browse.star(entry.id)
+    assert browse.entries()[0].starred is False
+
+
+def test_starring_something_that_is_gone_is_not_an_error(filled):
+    Browse(filled).star(99999)

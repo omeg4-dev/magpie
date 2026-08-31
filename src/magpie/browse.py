@@ -143,6 +143,16 @@ class Browse:
 
     def star_selected(self) -> None:
         entry = self.selected
+        if entry is not None:
+            self.star(entry.id)
+
+    def star(self, entry_id: int) -> None:
+        """Keep this one, or stop keeping it — whichever it is not now.
+
+        By id rather than by selection: the star lives on the row, and the row
+        you point at is rarely the row the arrows are on.
+        """
+        entry = next((e for e in self._entries if e.id == entry_id), None)
         if entry is None:
             return
         self._store.star(entry.id, not entry.starred)
