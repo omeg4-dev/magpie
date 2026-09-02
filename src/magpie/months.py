@@ -16,12 +16,12 @@ MONTH_NAMES = ("JAN", "FEB", "MAR", "APR", "MAY", "JUN",
 
 
 def by_year(months: list[Month]) -> list[tuple[int, list[Month]]]:
-    """Group months under their year, newest year and month first."""
+    """Group months under their year, oldest year and month first."""
     years: dict[int, list[Month]] = {}
     for month in months:
         years.setdefault(month.year, []).append(month)
-    return [(year, sorted(years[year], key=lambda m: m.month, reverse=True))
-            for year in sorted(years, reverse=True)]
+    return [(year, sorted(years[year], key=lambda m: m.month))
+            for year in sorted(years)]
 
 
 def label(month: Month) -> str:

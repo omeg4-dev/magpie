@@ -286,7 +286,7 @@ class Store:
         return self._blob_path(entry.sha256).read_bytes()
 
     def months(self, source: str | None = None) -> list[Month]:
-        """Which months have anything in them, newest first, with counts.
+        """Which months have anything in them, oldest first, with counts.
 
         This is what the screenshot browser is navigated by. Loading 2,700
         files to show you the twelve you took in June is what made it fall
@@ -303,7 +303,7 @@ class Store:
             "         AS month,"
             "       COUNT(*) AS count"
             f" FROM entry WHERE {' AND '.join(where)}"
-            " GROUP BY year, month ORDER BY year DESC, month DESC", params)
+            " GROUP BY year, month ORDER BY year ASC, month ASC", params)
         return [Month(row["year"], row["month"], row["count"]) for row in rows]
 
     def recent(self, limit: int = 200, *, kind: str | None = None,

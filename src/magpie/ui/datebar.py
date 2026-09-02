@@ -70,7 +70,7 @@ class DateBar(Gtk.Box):
             self._months.append(chip)
 
     def _pick_year(self, year: int) -> None:
-        """Picking a year lands on its newest month — one click, not two."""
+        """Picking a year lands on its first month — one click, not two."""
         self._year = year
         self._on_pick(dict(self._grouped)[year][0].key)
 

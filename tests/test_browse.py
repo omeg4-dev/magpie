@@ -60,7 +60,7 @@ def test_the_screenshot_browser_is_the_folder(filled):
 # -- one month at a time ---------------------------------------------------
 
 
-def test_the_screenshot_browser_opens_on_its_newest_month(filled):
+def test_the_screenshot_browser_opens_on_its_oldest_month(filled):
     # Never the whole folder. 2,700 files decoded at once is what made this
     # fall over, and the pictures you want are almost always the recent ones.
     browse = Browse(filled)

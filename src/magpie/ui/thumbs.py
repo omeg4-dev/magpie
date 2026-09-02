@@ -136,9 +136,9 @@ class Thumbs:
 
         loader = GdkPixbuf.PixbufLoader()
         if size is not None:
-            # Scaled while decoding: a 4K screenshot never becomes a full
-            # bitmap in memory just to end up 168 pixels wide.
-            loader.set_size(size, size)
+            # A loader has no dimensions until it reads the header.  GTK only
+            # honours set_size from size-prepared, so ask there rather than
+            # sizing it before it knows what it is decoding.
             loader.connect("size-prepared", _fit, size)
         try:
             loader.write(data)

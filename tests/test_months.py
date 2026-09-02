@@ -10,17 +10,17 @@ def test_nothing_groups_into_nothing():
 
 def test_months_group_under_their_year():
     grouped = by_year([Month(2026, 8, 3), Month(2026, 6, 1), Month(2025, 12, 9)])
-    assert [year for year, _ in grouped] == [2026, 2025]
+    assert [year for year, _ in grouped] == [2025, 2026]
 
 
-def test_the_newest_year_comes_first():
+def test_the_oldest_year_comes_first():
     grouped = by_year([Month(2024, 1, 1), Month(2026, 1, 1)])
-    assert grouped[0][0] == 2026
+    assert grouped[0][0] == 2024
 
 
-def test_a_year_keeps_its_months_newest_first():
+def test_a_year_keeps_its_months_oldest_first():
     grouped = by_year([Month(2026, 6, 1), Month(2026, 8, 1), Month(2026, 7, 1)])
-    assert [m.month for m in grouped[0][1]] == [8, 7, 6]
+    assert [m.month for m in grouped[0][1]] == [6, 7, 8]
 
 
 def test_a_year_carries_the_total_of_its_months():

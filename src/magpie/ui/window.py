@@ -632,7 +632,6 @@ class Window(Gtk.Window):
     def copy_and_close(self) -> None:
         entry = self.browse.selected
         if entry is not None and to_clipboard(self.store, entry):
-            sounds.play("copy", self._player)
             self.close()
 
     def _may_star(self) -> bool:

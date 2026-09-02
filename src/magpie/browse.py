@@ -30,7 +30,7 @@ MODE_FILTERS = {
     "starred": {"source": None, "kind": None, "starred": True},
 }
 
-#: Modes that open on their newest month rather than on everything. The
+#: Modes that open on their oldest month rather than on everything. The
 #: screenshot folder is thousands of files and grows daily; the clipboard is
 #: hundreds of one-line rows, and one you have to navigate by date is not a
 #: clipboard.
@@ -96,7 +96,7 @@ class Browse:
                                  starred=filters["starred"])
 
     def months(self) -> list[Month]:
-        """The months there are to choose from, in this mode. Newest first."""
+        """The months there are to choose from, in this mode. Oldest first."""
         return self._store.months(source=MODE_FILTERS[self.mode]["source"])
 
     # -- the rail and the filter box ---------------------------------------

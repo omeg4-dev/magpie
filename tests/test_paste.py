@@ -83,3 +83,12 @@ def test_a_missing_file_is_a_failure_not_a_crash(store, tmp_path):
     shot.unlink()
 
     assert to_clipboard(store, entry, Recorder()) is False
+
+
+def test_a_copy_command_failure_is_a_failure_not_a_crash(store):
+    entry = store.add(b"hello", "text/plain")
+
+    def unavailable(_argv, _data):
+        raise OSError("wl-copy is unavailable")
+
+    assert to_clipboard(store, entry, unavailable) is False

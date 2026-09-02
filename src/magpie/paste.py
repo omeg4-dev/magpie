@@ -29,4 +29,13 @@ def to_clipboard(store: Store, entry: Entry, run=_run) -> bool:
     # The stored mime is a header — "text/plain;charset=utf-8" — and wl-copy
     # wants a type. Handing it the header makes an offer nothing will accept.
     mime = entry.mime.split(";", 1)[0].strip() or "text/plain"
-    return run(["wl-copy", "--type", mime], data) == 0
+    try:
+        # Screenshot entries keep their payload in the original file rather
+        # than in Magpie's blob store.  Passing those bytes to wl-copy here is
+        # intentional: it offers the actual image, not its filesystem path.
+        return run(["wl-copy", "--type", mime], data) == 0
+    except OSError:
+        # Keep a missing wl-copy/Wayland connection from taking down the
+        # already-warm viewer.  The selected screenshot remains available for
+        # another attempt once the session is ready.
+        return False

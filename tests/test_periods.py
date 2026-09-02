@@ -23,14 +23,14 @@ def test_it_lists_the_months_that_have_something_in_them(store):
     store.add(b"june", "text/plain", at_ms=at(2026, 6))
     store.add(b"august", "text/plain", at_ms=at(2026, 8))
 
-    assert [(m.year, m.month) for m in store.months()] == [(2026, 8), (2026, 6)]
+    assert [(m.year, m.month) for m in store.months()] == [(2026, 6), (2026, 8)]
 
 
-def test_the_newest_month_comes_first(store):
+def test_the_oldest_month_comes_first(store):
     for year, month in ((2024, 1), (2026, 8), (2025, 12)):
         store.add(f"{year}-{month}".encode(), "text/plain", at_ms=at(year, month))
 
-    assert [(m.year, m.month) for m in store.months()][0] == (2026, 8)
+    assert [(m.year, m.month) for m in store.months()][0] == (2024, 1)
 
 
 def test_a_month_says_how_many_are_in_it(store):
