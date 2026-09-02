@@ -35,3 +35,19 @@ def test_a_broken_file_falls_back_to_the_defaults(tmp_path):
     path.write_text("this is not toml [[[")
 
     assert load(path) == Config()
+
+
+def test_magpie_config_points_it_somewhere_else(tmp_path, monkeypatch):
+    """Without this there is no way to run magpie against anything but the
+    real clipboard, so it cannot be demonstrated without showing one."""
+    elsewhere = tmp_path / "demo.toml"
+    elsewhere.write_text('store = "%s"\n' % (tmp_path / "store"))
+    monkeypatch.setenv("MAGPIE_CONFIG", str(elsewhere))
+    import importlib
+
+    from magpie import config as module
+    importlib.reload(module)
+    assert module.CONFIG_PATH == elsewhere
+    assert module.load().store == tmp_path / "store"
+    monkeypatch.delenv("MAGPIE_CONFIG")
+    importlib.reload(module)

@@ -6,6 +6,12 @@ images, and the screenshot folder they mostly come from.
 Super+V opens it. Escape closes it, Enter copies and closes, the arrows move,
 and everything else in it is a button.
 
+![the gallery](docs/demo.gif)
+
+*Recorded against a planted store, not a real clipboard:
+`MAGPIE_CONFIG=/path/to/config.toml` points the whole program somewhere else,
+which is how you demonstrate a clipboard without showing anyone yours.*
+
 ## What it recovered
 
 815 clipboard entries going back to 30 May 2026, out of two dead stores and a

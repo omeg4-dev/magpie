@@ -17,6 +17,8 @@ Run `magpie view --hidden` from a login service to build the window once.
 
 from __future__ import annotations
 
+import os
+
 import sys
 
 import gi
@@ -47,8 +49,18 @@ except (ValueError, ImportError):  # pragma: no cover - depends on the machine
 
 class MagpieApp(Gtk.Application):
     def __init__(self) -> None:
-        super().__init__(application_id=APP_ID,
-                         flags=Gio.ApplicationFlags.HANDLES_COMMAND_LINE)
+        # A second `magpie view` normally activates the window that is
+        # already running -- which is right for a clipboard bound to a
+        # single key, and wrong when MAGPIE_CONFIG has deliberately pointed
+        # this process at a different store: the running instance would
+        # answer, holding the real clipboard, and the sandbox would be
+        # silently ignored. So a sandboxed viewer takes its own identity.
+        sandboxed = bool(os.environ.get("MAGPIE_CONFIG"))
+        super().__init__(
+            application_id=None if sandboxed else APP_ID,
+            flags=(Gio.ApplicationFlags.HANDLES_COMMAND_LINE
+                   | (Gio.ApplicationFlags.NON_UNIQUE if sandboxed
+                      else Gio.ApplicationFlags.DEFAULT_FLAGS)))
         self._window: Window | None = None
         self.connect("command-line", self._on_command_line)
 

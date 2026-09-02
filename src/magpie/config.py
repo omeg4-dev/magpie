@@ -7,13 +7,20 @@ that opens on the defaults.
 
 from __future__ import annotations
 
+import os
 import tomllib
 from dataclasses import dataclass, fields, replace
 from pathlib import Path
 
 __all__ = ["Config", "load", "CONFIG_PATH"]
 
-CONFIG_PATH = Path.home() / ".config/magpie/config.toml"
+#: MAGPIE_CONFIG points the whole program at a different config, and so at a
+#: different store. Without it there is no way to run magpie against
+#: anything but the real clipboard -- which makes it impossible to
+#: demonstrate, screenshot or try out without putting real clipboard history
+#: on screen.
+CONFIG_PATH = Path(os.environ.get(
+    "MAGPIE_CONFIG", Path.home() / ".config/magpie/config.toml"))
 
 
 @dataclass(frozen=True)
