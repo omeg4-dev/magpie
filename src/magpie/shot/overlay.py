@@ -258,11 +258,14 @@ class RegionOverlay(Gtk.Window):
         ix, iy = px * k, py * k
         cx = px + 26 + LOUPE_R if px + 26 + 2 * LOUPE_R < width - 8 else px - 26 - LOUPE_R
         cy = py + 26 + LOUPE_R if py + 26 + 2 * LOUPE_R < height - 40 else py - 26 - LOUPE_R
+        # Every arc starts from a clean path: an arc draws a line from wherever
+        # the path last was, which is how a stray diagonal got into the loupe.
+        ctx.new_path()
         ctx.save()
         ctx.arc(cx, cy, LOUPE_R, 0, 2 * math.pi)
-        ctx.clip_preserve()
+        ctx.clip()
         ctx.set_source_rgb(0, 0, 0)
-        ctx.fill_preserve()
+        ctx.paint()
         ctx.save()
         ctx.translate(cx, cy)
         ctx.scale(LOUPE_ZOOM, LOUPE_ZOOM)
@@ -273,11 +276,14 @@ class RegionOverlay(Gtk.Window):
         # The pixel under the pointer, boxed.
         ctx.set_line_width(1.5)
         ctx.set_source_rgba(1, 1, 1, 0.95)
+        ctx.new_path()
         ctx.rectangle(cx - LOUPE_ZOOM / 2, cy - LOUPE_ZOOM / 2, LOUPE_ZOOM, LOUPE_ZOOM)
         ctx.stroke()
+        ctx.new_path()
         ctx.restore()
         ctx.set_line_width(2)
         ctx.set_source_rgba(*accent, 1)
+        ctx.new_path()
         ctx.arc(cx, cy, LOUPE_R, 0, 2 * math.pi)
         ctx.stroke()
         self._pill(ctx, f"{math.floor(ix)}, {math.floor(iy)}", cx, cy + LOUPE_R + 8, width, height,
