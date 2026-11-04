@@ -108,6 +108,9 @@ class Item:
     def drag_handle(self, name: str, x: float, y: float, *, keep_ratio: bool = False) -> None:
         pass
 
+    def scaled(self, f: float) -> None:  # pragma: no cover
+        raise NotImplementedError
+
 
 @dataclass(eq=False)
 class _TwoPoint(Item):
@@ -129,6 +132,11 @@ class _TwoPoint(Item):
 
     def length(self) -> float:
         return math.hypot(self.p1[0] - self.p0[0], self.p1[1] - self.p0[1])
+
+    def scaled(self, f: float) -> None:
+        self.p0 = (self.p0[0] * f, self.p0[1] * f)
+        self.p1 = (self.p1[0] * f, self.p1[1] * f)
+        self.width *= f
 
 
 @dataclass(eq=False)
@@ -259,6 +267,10 @@ class _Stroke(Item):
     def translate(self, dx: float, dy: float) -> None:
         self.points = [(px + dx, py + dy) for px, py in self.points]
 
+    def scaled(self, f: float) -> None:
+        self.points = [(px * f, py * f) for px, py in self.points]
+        self.width *= f
+
 
 @dataclass(eq=False)
 class Pen(_Stroke):
@@ -299,6 +311,15 @@ class Text(Item):
         self.x += dx
         self.y += dy
 
+    def scaled(self, f: float) -> None:
+        self.x *= f
+        self.y *= f
+        self.size *= f
+        if self.w:
+            self.w *= f
+        if self.h:
+            self.h *= f
+
 
 @dataclass(eq=False)
 class Badge(Item):
@@ -322,6 +343,11 @@ class Badge(Item):
         self.x += dx
         self.y += dy
 
+    def scaled(self, f: float) -> None:
+        self.x *= f
+        self.y *= f
+        self.radius *= f
+
 
 @dataclass(eq=False)
 class _Region(_TwoPoint):
@@ -335,6 +361,10 @@ class _Region(_TwoPoint):
 
     def drag_handle(self, name: str, x: float, y: float, *, keep_ratio: bool = False) -> None:
         _Box.drag_handle(self, name, x, y, keep_ratio=keep_ratio)  # type: ignore[arg-type]
+
+    def scaled(self, f: float) -> None:
+        super().scaled(f)
+        self.strength *= f
 
 
 @dataclass(eq=False)
@@ -386,6 +416,11 @@ class Sticker(Item):
     def translate(self, dx: float, dy: float) -> None:
         self.x += dx
         self.y += dy
+
+    def scaled(self, f: float) -> None:
+        self.x *= f
+        self.y *= f
+        self.size *= f
 
     def handles(self) -> dict[str, tuple[float, float]]:
         x, y, w, h = self.bounds()
@@ -482,6 +517,14 @@ class Doc:
     def clear(self) -> None:
         self.checkpoint()
         self.items.clear()
+
+    def scale_all(self, f: float, new_w: int, new_h: int) -> None:
+        self.width = new_w
+        self.height = new_h
+        for item in self.items:
+            item.scaled(f)
+        self._undo.clear()
+        self._redo.clear()
 
     # -- undo ---------------------------------------------------------------
 
