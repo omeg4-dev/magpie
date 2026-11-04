@@ -12,7 +12,7 @@ from magpie import sounds
 
 
 def test_both_sounds_ship_with_the_program():
-    for name in ("open", "copy"):
+    for name in ("open", "copy", "shot"):
         assert sounds.file(name).exists(), f"{name}.wav is missing"
 
 
@@ -87,3 +87,12 @@ def test_players_are_reaped_rather_than_left_as_zombies():
     sounds._children[0].wait()
     sounds._reap()
     assert sounds._children == []
+
+
+def test_the_screenshot_sound_is_short_and_quiet():
+    assert 0.1 < _seconds("shot") < 0.5
+    with wave.open(str(sounds.file("shot"))) as wav:
+        frames = wav.readframes(wav.getnframes())
+    peak = max(abs(int.from_bytes(frames[i:i + 2], "little", signed=True))
+               for i in range(0, len(frames), 2))
+    assert peak < 0.4 * 32767

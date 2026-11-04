@@ -50,19 +50,46 @@ Escape and Enter act on **release**, not press — closing on the press hands th
 before the key is let go, and the window underneath gets the release. That's how Escape used
 to dismiss the dialog behind the clipboard, and how Enter left a newline in the editor.
 
-### 🔊 And it makes two sounds
+### 📸 It takes them, too
+
+`magpie shot` is a screenshot tool that lives in the same resident process as the clipboard,
+so a screenshot appears the instant the key goes down — nothing starts, nothing loads.
+
+```
+Ctrl + Print    drag a region        (frozen, magnifier, live size)
+Super + Print   the focused monitor
+Alt + Print     every monitor in one picture
+```
+
+The screen is grabbed once, frozen, and dimmed except for your region; letting go opens the
+editor over it. **Enter** saves — to `YYYY-MM/DD-MM-YYYY--HH-MM-SS.png`, to the clipboard and into
+this store, with a notification (Open / Upload) — and **Escape** closes without saving.
+The editor has arrows, lines, rectangles, ellipses, pen and highlighter, text, numbered steps,
+blur, pixelate and solid redaction (baked into the pixels: what is underneath is gone), and an
+emoji picker that draws each emoji in the font of the platform you choose (Apple, WhatsApp,
+Google, Microsoft, OpenMoji, JoyPixels). Objects stay editable until you save: click one to move
+or resize it, Ctrl+Z to undo.
+
+The emoji fonts are not in this repository (they are other people's); put the `.ttf` files in
+`~/.local/share/magpie-fonts/` and the platforms whose fonts are there appear in the picker.
+Emoji names come from the Unicode CLDR data in `src/magpie/shot/data/emoji.tsv`.
+
+### 🔊 And it makes three sounds
 
 Opening is a **click** — seven milliseconds of noise under a steep decay, a switch rather than
 a notification, because it happens every single time and has to be the kind of sound you stop
 hearing. Copying is **one short note**, the only confirmation you get.
 
-Both spawn detached. A window that waits eighty milliseconds for a speaker is worse than a
+A screenshot gets a third — a faint shutter tick and two soft bell notes a fifth apart, going up.
+
+All of them spawn detached. A window that waits eighty milliseconds for a speaker is worse than a
 silent one.
 
 ### 🚀 Running it
 
 ```sh
 magpie view              # the window
+magpie shot [mode]       # screenshot: region (default), monitor, all
 magpie search <query>    # find entries by their words
 magpie shots [query]     # the screenshot browser
 magpie ocr [n]           # read pictures nobody has read yet

@@ -18,7 +18,7 @@ from pathlib import Path
 
 __all__ = ["play", "file", "find_player", "PLAYERS", "SOUNDS"]
 
-SOUNDS = ("open", "copy")
+SOUNDS = ("open", "copy", "shot")
 
 #: In order of preference. `pw-play` talks to PipeWire directly, which is what
 #: this desktop runs; the rest are for machines that do not.

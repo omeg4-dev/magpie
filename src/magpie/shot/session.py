@@ -186,7 +186,7 @@ class Session:
             try:
                 saved = output.deliver(
                     png, store, root=config.shots_root, fallback=config.shots_fallback,
-                    play=None if quiet else (lambda n: sounds.play(n, self._player)))
+                    play=None if quiet else (lambda _name: sounds.play("shot", self._player)))
             finally:
                 store.db.close()
             if not quiet:

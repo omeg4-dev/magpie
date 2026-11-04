@@ -1,4 +1,4 @@
-"""Write the two sounds the viewer makes.
+"""Write the sounds the viewer makes.
 
 They are generated rather than sampled so they can be tuned in one place and
 so the repository carries no borrowed audio. Run this after changing anything
@@ -72,6 +72,36 @@ def click(seconds: float = 0.007, decay: float = 0.0013, hz: float = 2000.0) -> 
     return out
 
 
+def bell(hz: float, seconds: float, decay: float, level: float = LEVEL) -> list[float]:
+    """A soft struck-bell note: a sine, a hushed octave and a hushed twelfth.
+
+    The upper partials die faster than the fundamental, which is what makes it
+    sound like glass or a small bell instead of a synthesiser beep.
+    """
+    frames = int(RATE * seconds)
+    attack = int(RATE * 0.003)
+    out = []
+    for i in range(frames):
+        t = i / RATE
+        value = (math.sin(2 * math.pi * hz * t)
+                 + 0.30 * math.sin(2 * math.pi * 2 * hz * t) * math.exp(-t / (decay * 0.6))
+                 + 0.12 * math.sin(2 * math.pi * 3 * hz * t) * math.exp(-t / (decay * 0.35)))
+        envelope = math.exp(-t / decay) * (i / attack if i < attack else 1.0)
+        out.append(value * envelope * level)
+    return out
+
+
+def mix(*parts: tuple[float, list[float]]) -> list[float]:
+    """Lay sounds over each other, each starting at its own time in seconds."""
+    length = max(int(RATE * at) + len(samples) for at, samples in parts)
+    out = [0.0] * length
+    for at, samples in parts:
+        offset = int(RATE * at)
+        for i, value in enumerate(samples):
+            out[offset + i] += value
+    return out
+
+
 def write(name: str, samples: list[float]) -> Path:
     path = OUT / f"{name}.wav"
     with wave.open(str(path), "wb") as wav:
@@ -92,6 +122,13 @@ def main() -> None:
     # Copying: one note, landing. Higher and shorter, so it reads as "done"
     # rather than as another window appearing.
     write("copy", tone(987.77, 932.33, 0.07, decay=0.035, harmonic=0.3))
+    # A screenshot: the faintest shutter tick, then two small bell notes a
+    # fifth apart, going up — G5 then D6 — which reads as "got it" and is
+    # pleasant enough to hear a few hundred times. Quiet, and over in a third
+    # of a second.
+    write("shot", mix((0.0, click(0.006, 0.0011, 1600.0)),
+                      (0.014, bell(783.99, 0.30, 0.085, 0.17)),
+                      (0.085, bell(1174.66, 0.30, 0.10, 0.15))))
 
 
 if __name__ == "__main__":
