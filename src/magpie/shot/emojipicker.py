@@ -25,6 +25,11 @@ __all__ = ["EmojiPicker"]
 
 STATE = Path(GLib.get_user_state_dir()) / "magpie"
 THUMB = 64
+
+#: What is handed to the editor. Fonts only carry ~100-160 px bitmaps, so anything
+#: bigger than that is an upscale; doing it once here, with a good filter, keeps big
+#: stickers smooth instead of leaving cairo to stretch a small raster.
+PLACED = 512
 CELL = 42
 
 #: One representative per group, for the strip under the search box.
@@ -183,7 +188,7 @@ class EmojiPicker(Gtk.Popover):
         char = item.get_item().get_string()
         picture = item.get_child()
         picture.set_paintable(self._thumb(char))
-        picture.set_tooltip_text(next((e.name for e in emoji.search(char, limit=1)), char))
+        picture.set_tooltip_text(emoji.name_of(char))
 
     def _thumb(self, char: str) -> Gdk.Texture | None:
         key = (self.platform.id, char)
@@ -210,5 +215,5 @@ class EmojiPicker(Gtk.Popover):
 
     def _choose(self, char: str) -> None:
         self.recents.add(char)
-        surface = from_pil(emoji.sticker(self.platform, char, 256))
+        surface = from_pil(emoji.sticker(self.platform, char, PLACED))
         self.emit("picked", surface, char, self.platform.id)

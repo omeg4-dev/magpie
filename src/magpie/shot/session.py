@@ -28,7 +28,6 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Gdk", "4.0")
 from gi.repository import Gdk, GLib  # noqa: E402
 
-from .. import sounds  # noqa: E402
 from ..config import load  # noqa: E402
 from ..store import Store  # noqa: E402
 from . import grab, output, style  # noqa: E402
@@ -45,7 +44,6 @@ class Session:
         self.editor = None
         self.overlays: dict[str, object] = {}
         self.shots: list[tuple[grab.Monitor, object, object]] = []  # monitor, PIL image, surface
-        self._player = sounds.find_player()
         style.apply()
         style.watch()
 
@@ -185,8 +183,7 @@ class Session:
             store = Store(config.store)
             try:
                 saved = output.deliver(
-                    png, store, root=config.shots_root, fallback=config.shots_fallback,
-                    play=None if quiet else (lambda _name: sounds.play("shot", self._player)))
+                    png, store, root=config.shots_root, fallback=config.shots_fallback)
             finally:
                 store.db.close()
             if not quiet:

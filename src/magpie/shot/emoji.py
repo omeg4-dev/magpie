@@ -25,6 +25,7 @@ __all__ = [
     "groups",
     "search",
     "supports",
+    "name_of",
     "sticker",
     "Recents",
 ]
@@ -117,6 +118,25 @@ def groups(items: list[Emoji] | None = None) -> list[str]:
     return result
 
 
+@functools.lru_cache(maxsize=8)
+def _index(items_id: int, n: int, _items: tuple) -> list[tuple[Emoji, str, str, str]]:
+    return [(e, e.name.lower(), " | ".join(e.keywords).lower(), e.char) for e in _items]
+
+
+def _lowered(items: list[Emoji]) -> list[tuple[Emoji, str, str, str]]:
+    """(emoji, lowercase name, lowercase keywords joined, char), built once per list."""
+    return _index(id(items), len(items), tuple(items))
+
+
+@functools.cache
+def name_of(char: str) -> str:
+    """The CLDR name of one emoji character, or the character itself."""
+    for e in catalogue():
+        if e.char == char:
+            return e.name
+    return char
+
+
 def search(query: str, items: list[Emoji] | None = None, limit: int = 120) -> list[Emoji]:
     """Search emojis case-insensitively, ranking name matches above keyword matches."""
     if items is None:
@@ -129,39 +149,24 @@ def search(query: str, items: list[Emoji] | None = None, limit: int = 120) -> li
     q_lower = q_clean.lower()
     terms = q_lower.split()
 
-    def get_rank(e: Emoji) -> int | None:
-        if e.char == q_clean:
-            return 0
-
-        name_lower = e.name.lower()
-        kws_lower = [kw.lower() for kw in e.keywords]
-
+    buckets: list[list[Emoji]] = [[], [], [], [], []]
+    for e, name, kws, char in _lowered(items):
+        if char == q_clean:
+            buckets[0].append(e)
+            continue
         for t in terms:
-            if t in name_lower:
-                continue
-            if any(t in kw for kw in kws_lower):
-                continue
-            if t in e.char:
-                continue
-            return None
-
-        if name_lower == q_lower:
-            return 1
-        elif name_lower.startswith(q_lower):
-            return 2
-        elif q_lower in name_lower:
-            return 3
+            if t not in name and t not in kws and t not in char:
+                break
         else:
-            return 4
-
-    matches: list[tuple[int, Emoji]] = []
-    for e in items:
-        rank = get_rank(e)
-        if rank is not None:
-            matches.append((rank, e))
-
-    matches.sort(key=lambda pair: pair[0])
-    return [e for _, e in matches][:limit]
+            if name == q_lower:
+                buckets[1].append(e)
+            elif name.startswith(q_lower):
+                buckets[2].append(e)
+            elif q_lower in name:
+                buckets[3].append(e)
+            else:
+                buckets[4].append(e)
+    return [e for bucket in buckets for e in bucket][:limit]
 
 
 _supports_cache: dict[tuple[str, str], bool] = {}
@@ -246,7 +251,7 @@ def sticker(platform: Platform, char: str, size: int = 256) -> Image.Image:
         nh = size
         nw = max(1, round(cw * size / ch))
 
-    scaled = crop.resize((nw, nh), Image.LANCZOS)
+    scaled = crop.resize((nw, nh), Image.LANCZOS, reducing_gap=None)
     out = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     out.paste(scaled, ((size - nw) // 2, (size - nh) // 2))
     return out
