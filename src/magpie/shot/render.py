@@ -120,11 +120,12 @@ class Renderer:
     # -- public -------------------------------------------------------------
 
     def paint(self, ctx: cairo.Context, items, scale: float = 1.0, *,
-              hide: int | None = None) -> None:
+              hide: int | None = None, fast: bool = False) -> None:
         """The picture and everything on it. `scale` is screen pixels per image
-        pixel; `hide` leaves one object out (the one being typed into)."""
+        pixel; `hide` leaves one object out (the one being typed into); `fast`
+        shrinks with cairo's own filter instead of waiting for the good version."""
         ctx.save()
-        if scale < 1.0:
+        if scale < 1.0 and not fast:
             # Down-scaling a screenshot on every frame is slow and shimmers, so
             # it is shrunk once, well, and that is what gets painted.
             ctx.set_source_surface(self._view(scale), 0, 0)
@@ -133,13 +134,21 @@ class Renderer:
         else:
             ctx.scale(scale, scale)
             ctx.set_source_surface(self.base, 0, 0)
-            if scale != 1.0:
-                ctx.get_source().set_filter(cairo.FILTER_NEAREST)
+            ctx.get_source().set_filter(cairo.FILTER_BILINEAR if scale < 1.0
+                                        else cairo.FILTER_NEAREST)
             ctx.paint()
         for item in items:
             if item.id != hide:
                 self._paint_item(ctx, item)
         ctx.restore()
+
+    def has_view(self, scale: float) -> bool:
+        """Is the well-shrunk copy for this scale already made?"""
+        return self._view_size == (round(self.width * scale), round(self.height * scale))
+
+    def warm_view(self, scale: float) -> None:
+        if scale < 1.0:
+            self._view(scale)
 
     def export_png(self, items) -> bytes:
         surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, self.width, self.height)

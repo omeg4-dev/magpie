@@ -116,9 +116,16 @@ window.shot-editor {{
 .size:checked {{ color: {p.accent}; }}
 
 .canvas-wrap {{ background: {p.rail}; }}
-.canvas-frame {{
-  box-shadow: 0 0 0 1px alpha(#ffffff, 0.08), 0 8px 30px alpha(#000000, 0.45);
-}}
+
+.zoom {{ background: transparent; color: {p.faint}; font-family: {MONO}; font-size: 11px;
+  min-height: 0; padding: 3px 9px; border-radius: 8px; border: none; }}
+.zoom:hover {{ background: {p.slate}; color: {p.bone}; }}
+.upscale {{ color: {p.faint}; font-size: 11px; }}
+.upscale button.up {{ background: {p.quill}; color: {p.bone}; font-family: {MONO}; font-size: 11px;
+  min-height: 0; padding: 3px 9px; border-radius: 8px; border: none; }}
+.upscale button.up:hover {{ background: {p.slate}; }}
+.upscale button.up:disabled {{ opacity: 0.4; }}
+.upscale.suggest {{ background: {p.accent_dim}; border-radius: 10px; padding: 2px 4px 2px 10px; color: {p.bone}; }}
 
 .footer {{
   background: {p.pane};

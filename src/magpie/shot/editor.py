@@ -26,13 +26,14 @@ from gi.repository import Gdk, GLib, Gtk, Pango  # noqa: E402
 
 from ..palette import Palette, _rgb, read  # noqa: E402
 from ..config import load  # noqa: E402
-from . import icons  # noqa: E402
+from . import icons, upscale  # noqa: E402
 from .style import OPENING  # noqa: E402
 from .emojipicker import EmojiPicker  # noqa: E402
 from .model import (PALETTE, Arrow, Badge, Blur, Doc, Ellipse, Highlighter, Item,  # noqa: E402
                     Line, Pen, Pixelate, Rect, Redact, Sticker, Text, Tool, rgba)
 from .overlay import as_layer  # noqa: E402
-from .render import Renderer, measure_text  # noqa: E402
+from .render import Renderer, from_pil, measure_text, to_pil  # noqa: E402
+from .viewport import Viewport  # noqa: E402
 
 __all__ = ["Editor"]
 
@@ -60,6 +61,8 @@ TOOLS = (
 DEFAULT_COLOR = {Tool.HIGHLIGHTER: 2, Tool.REDACT: 8}
 
 HANDLE_PX = 9.0  # screen pixels, whatever the zoom
+ZOOM_STEP = 1.15   # one wheel notch, one + or - key press
+MAX_UPSCALED_PIXELS = 36_000_000   # the biggest picture a 2x/4x upscale may produce
 
 CURSORS = {"nw": "nwse-resize", "se": "nwse-resize", "ne": "nesw-resize",
            "sw": "nesw-resize", "p0": "crosshair", "p1": "crosshair"}
@@ -121,7 +124,17 @@ class Editor(Gtk.Window):
         # Per-picture state, set by open().
         self.doc = Doc(1, 1)
         self.renderer: Renderer | None = None
-        self.scale = 1.0
+        self.view = Viewport(1, 1, 1, 1)
+        self._ppl = 1.0                 # image pixels per logical pixel at "100 %"
+        self._pointer = (0.0, 0.0)
+        self._start_scale = 1.0         # what "fit" meant when the picture opened
+        self._user_zoomed = False
+        self._space = False             # Space held: drag pans
+        self._pan: tuple[float, float, float, float] | None = None   # ox, oy, last dx, last dy
+        self._fast_timer = 0
+        self._destination = ""
+        self._job: upscale.Job | None = None
+        self._upscaled = 1
         self.selected: Item | None = None
         self.editing: Item | None = None
         self._drag: tuple | None = None
@@ -144,6 +157,11 @@ class Editor(Gtk.Window):
         keys.connect("key-pressed", self._pressed)
         keys.connect("key-released", self._released)
         self.add_controller(keys)
+
+    @property
+    def scale(self) -> float:
+        """Screen pixels per image pixel; the viewport owns it."""
+        return self.view.scale
 
     # -- building -----------------------------------------------------------
 
@@ -168,10 +186,10 @@ class Editor(Gtk.Window):
 
         self.canvas = Gtk.DrawingArea()
         self.canvas.set_draw_func(self._draw)
-        self.canvas.set_halign(Gtk.Align.CENTER)
-        self.canvas.set_valign(Gtk.Align.CENTER)
-        self.canvas.add_css_class("canvas-frame")
+        self.canvas.set_hexpand(True)
+        self.canvas.set_vexpand(True)
         self.canvas.set_cursor_from_name("crosshair")
+        self.canvas.connect("resize", self._canvas_resized)
 
         self.overlay = Gtk.Overlay()
         self.overlay.set_child(self.canvas)
@@ -201,6 +219,22 @@ class Editor(Gtk.Window):
         motion = Gtk.EventControllerMotion()
         motion.connect("motion", self._hover)
         self.canvas.add_controller(motion)
+
+        # Looking around: wheel zooms, middle button (or Space) drags, pinch zooms.
+        pan = Gtk.GestureDrag()
+        pan.set_button(2)
+        pan.connect("drag-begin", self._pan_begin)
+        pan.connect("drag-update", self._pan_update)
+        pan.connect("drag-end", self._pan_end)
+        self.canvas.add_controller(pan)
+        scroll = Gtk.EventControllerScroll.new(Gtk.EventControllerScrollFlags.BOTH_AXES)
+        scroll.connect("scroll", self._scrolled)
+        self.canvas.add_controller(scroll)
+        self._pinch_from = 1.0
+        pinch = Gtk.GestureZoom()
+        pinch.connect("begin", lambda *_: setattr(self, "_pinch_from", self.view.scale))
+        pinch.connect("scale-changed", self._pinched)
+        self.canvas.add_controller(pinch)
 
         self._build_text_entry()
         self.picker = EmojiPicker(recents_path)
@@ -306,6 +340,29 @@ class Editor(Gtk.Window):
         self.info.add_css_class("info")
         self.info.set_hexpand(True)
         bar.append(self.info)
+
+        self.up_box = Gtk.Box(spacing=4)
+        self.up_box.add_css_class("upscale")
+        self.up_label = Gtk.Label(label="Upscale")
+        self.up_label.add_css_class("up-label")
+        self.up_box.append(self.up_label)
+        self.up_buttons: dict[int, Gtk.Button] = {}
+        for factor in (2, 4):
+            b = _unfocusable(Gtk.Button(label=f"{factor}×"))
+            b.add_css_class("up")
+            b.set_tooltip_text(f"AI upscale to {factor}× size  ({'U' if factor == 2 else 'Shift+U'})")
+            b.connect("clicked", lambda _b, f=factor: self._upscale(f))
+            self.up_buttons[factor] = b
+            self.up_box.append(b)
+        self.up_box.set_visible(upscale.available())
+        bar.append(self.up_box)
+
+        self.zoom_button = _unfocusable(Gtk.Button(label="100 %"))
+        self.zoom_button.add_css_class("zoom")
+        self.zoom_button.set_tooltip_text(
+            "Zoom: scroll wheel, + and −\nMove: middle-drag or Space+drag\nClick or 0: fit")
+        self.zoom_button.connect("clicked", lambda *_: self._zoom_fit())
+        bar.append(self.zoom_button)
         bar.append(_button("Close", "Esc", "ghost", self.cancel))
         bar.append(_button("Save", "Enter", "cta", self.save))
         return bar
@@ -331,12 +388,17 @@ class Editor(Gtk.Window):
         from gi.repository import Gtk4LayerShell
 
         self.palette = read()
+        self._cancel_job()
         Gtk4LayerShell.set_monitor(self, gdk_monitor)
         self.doc = Doc(image.get_width(), image.get_height())
         self.renderer = Renderer(image)
         self.selected = None
         self.editing = None
         self._drag = None
+        self._pan = None
+        self._space = False
+        self._upscaled = 1
+        self._destination = destination
         self._eat_release.clear()
         self.entry.set_visible(False)
 
@@ -346,22 +408,35 @@ class Editor(Gtk.Window):
         avail_h = geometry.height * 0.90 - 56 - 58 - 56
         natural = 1.0 / pixels_per_logical           # one image pixel = one device pixel
         fit = min(avail_w / self.doc.width, avail_h / self.doc.height)
-        self.scale = min(fit, natural)
-        if self.doc.width * self.scale < 420 < fit * self.doc.width:
-            self.scale = min(fit, 420 / self.doc.width, natural * 3)
-        width = max(1, round(self.doc.width * self.scale))
-        height = max(1, round(self.doc.height * self.scale))
-        self.scale = width / self.doc.width
-        self.canvas.set_content_width(width)
-        self.canvas.set_content_height(height)
-        self.wrap.set_size_request(max(width + 56, 640), max(height + 56, 470))
+        scale = min(fit, natural)
+        if self.doc.width * scale < 420 < fit * self.doc.width:
+            scale = min(fit, 420 / self.doc.width, natural * 3)
+        width = max(1, round(self.doc.width * scale))
+        height = max(1, round(self.doc.height * scale))
+        scale = width / self.doc.width
+        # The card is sized for the picture as it first appears; from then on the
+        # canvas is a window onto it that can be zoomed and moved.
+        view_w, view_h = max(width + 56, 640), max(height + 56, 470)
+        self.wrap.set_size_request(view_w, view_h)
+        self._ppl = pixels_per_logical
+        self._new_view(view_w, view_h, scale)
 
-        self.info.set_label(f"{self.doc.width} × {self.doc.height} px"
-                            + (f"   ·   {destination}" if destination else ""))
         self._set_tool(Tool.ARROW if self.tool is Tool.SELECT else self.tool, force=True)
         self._refresh_actions()
+        self._refresh_info()
         self.canvas.queue_draw()
         self.present()
+
+    def _new_view(self, view_w: float, view_h: float, scale: float | None = None) -> None:
+        """A fresh viewport on the current picture, centred, at `scale` (or fit)."""
+        self.view = Viewport(self.doc.width, self.doc.height, view_w, view_h,
+                             device_ratio=self._ppl)
+        if scale is None:
+            scale = self.view.fit
+        self._start_scale = scale
+        self._user_zoomed = False
+        self.view.max_zoom = max(32.0, scale)
+        self.view.reset(scale)
 
     def save(self) -> None:
         self._finish_text()
@@ -383,6 +458,7 @@ class Editor(Gtk.Window):
             self.add_css_class(OPENING)
 
     def _close(self) -> None:
+        self._cancel_job()
         self.remove_css_class(OPENING)
         self.picker.popdown()
         self.set_visible(False)
@@ -507,11 +583,34 @@ class Editor(Gtk.Window):
     def _draw(self, _area, ctx: cairo.Context, width: int, height: int) -> None:
         if self.renderer is None:
             return
-        scale = width / self.doc.width
+        view = self.view
+        scale = view.scale
+        ctx.rectangle(0, 0, width, height)
+        ctx.clip()
+        ctx.translate(view.ox, view.oy)
+        # A thin edge so the picture reads as a sheet on the dark background.
+        ctx.rectangle(-0.5, -0.5, self.doc.width * scale + 1, self.doc.height * scale + 1)
+        ctx.set_source_rgba(1, 1, 1, 0.1)
+        ctx.set_line_width(1)
+        ctx.stroke()
         hide = self.editing.id if self.editing is not None else None
-        self.renderer.paint(ctx, self.doc.items, scale, hide=hide)
+        fast = scale < 1.0 and not self.renderer.has_view(scale)
+        self.renderer.paint(ctx, self.doc.items, scale, hide=hide, fast=fast)
+        if fast:
+            # Shrinking a big screenshot properly takes tens of ms; while the wheel is
+            # still turning show a quick version and do the good one when it pauses.
+            if self._fast_timer:
+                GLib.source_remove(self._fast_timer)
+            self._fast_timer = GLib.timeout_add(120, self._sharpen)
         if self.selected is not None and self.selected is not self.editing:
             self._paint_selection(ctx, self.selected, scale)
+
+    def _sharpen(self) -> bool:
+        self._fast_timer = 0
+        if self.renderer is not None:
+            self.renderer.warm_view(self.view.scale)
+            self.canvas.queue_draw()
+        return GLib.SOURCE_REMOVE
 
     def _paint_selection(self, ctx: cairo.Context, item: Item, scale: float) -> None:
         r, g, b = (c / 255 for c in _rgb(self.palette.accent))
@@ -542,7 +641,7 @@ class Editor(Gtk.Window):
     # -- pointer ------------------------------------------------------------
 
     def _pos(self, x: float, y: float) -> tuple[float, float]:
-        return x / self.scale, y / self.scale
+        return self.view.to_image(x, y)
 
     def _handle_at(self, item: Item | None, x: float, y: float) -> str | None:
         if item is None:
@@ -554,7 +653,11 @@ class Editor(Gtk.Window):
         return None
 
     def _hover(self, _controller, sx: float, sy: float) -> None:
+        self._pointer = (sx, sy)
         if self._drag is not None or self.renderer is None:
+            return
+        if self._space:
+            self.canvas.set_cursor_from_name("grab")
             return
         x, y = self._pos(sx, sy)
         name = self._handle_at(self.selected, x, y)
@@ -577,6 +680,10 @@ class Editor(Gtk.Window):
         if self.renderer is None:
             return
         self.canvas.grab_focus()
+        if self._space:
+            self._pan_begin(_gesture, sx, sy)
+            self._drag = ("pan",)
+            return
         self._finish_text()
         x, y = self._pos(sx, sy)
 
@@ -641,6 +748,9 @@ class Editor(Gtk.Window):
     def _drag_update(self, gesture, dx: float, dy: float) -> None:
         if self._drag is None:
             return
+        if self._drag[0] == "pan":
+            self._pan_update(gesture, dx, dy)
+            return
         _, sx, sy = gesture.get_start_point()
         x, y = self._pos(sx + dx, sy + dy)
         kind = self._drag[0]
@@ -685,6 +795,9 @@ class Editor(Gtk.Window):
         drag, self._drag = self._drag, None
         if drag is None:
             return
+        if drag[0] == "pan":
+            self._pan_end(_gesture, _dx, _dy)
+            return
         kind, item = drag[0], drag[1]
         if kind == "move" and not drag[4]:
             self.doc.discard_checkpoint()
@@ -725,8 +838,9 @@ class Editor(Gtk.Window):
         self._editing_new = new
         self.buffer.set_text(item.text)
         self._style_entry(item)
-        self.entry.set_margin_start(round(item.x * self.scale))
-        self.entry.set_margin_top(round(item.y * self.scale))
+        sx, sy = self.view.to_screen(item.x, item.y)
+        self.entry.set_margin_start(round(sx))
+        self.entry.set_margin_top(round(sy))
         self.entry.set_visible(True)
         self.entry.grab_focus()
         self.buffer.place_cursor(self.buffer.get_end_iter())
@@ -765,6 +879,158 @@ class Editor(Gtk.Window):
         self._sync_options()
         self._refresh_actions()
         self.canvas.queue_draw()
+
+    # -- looking around -----------------------------------------------------
+
+    def _canvas_resized(self, _area, width: int, height: int) -> None:
+        if self.renderer is None or width < 2 or height < 2:
+            return
+        if self._user_zoomed:
+            self.view.resize(width, height)
+        else:
+            self._new_view(width, height, self._start_scale)
+        self._refresh_info()
+
+    def _view_changed(self) -> None:
+        self._user_zoomed = True
+        self._refresh_info()
+        self.canvas.queue_draw()
+
+    def _zoom_at(self, sx: float, sy: float, factor: float) -> None:
+        if self.renderer is None or self._drag is not None:
+            return
+        self._finish_text()
+        if self.view.zoom_at(sx, sy, factor):
+            self._view_changed()
+
+    def _zoom_centre(self, factor: float) -> None:
+        self._zoom_at(self.view.view_w / 2, self.view.view_h / 2, factor)
+
+    def _zoom_fit(self) -> None:
+        if self.renderer is None:
+            return
+        self._finish_text()
+        self.view.reset(self._start_scale)
+        self._user_zoomed = False
+        self._refresh_info()
+        self.canvas.queue_draw()
+
+    def _scrolled(self, controller, dx: float, dy: float) -> bool:
+        if self.renderer is None:
+            return False
+        ctrl = bool(controller.get_current_event_state() & Gdk.ModifierType.CONTROL_MASK)
+        sx, sy = self._pointer
+        if controller.get_unit() == Gdk.ScrollUnit.WHEEL or ctrl:
+            self._zoom_at(sx, sy, ZOOM_STEP ** (-dy if dy else -dx))
+        elif self._drag is None:
+            # Two fingers on a touchpad slide the picture.
+            self._finish_text()
+            if self.view.pan(-dx * 8, -dy * 8):
+                self._view_changed()
+        return True
+
+    def _pinched(self, gesture, factor: float) -> None:
+        ok, cx, cy = gesture.get_bounding_box_center()
+        if ok and self.renderer is not None and self._drag is None:
+            self._finish_text()
+            if self.view.zoom_to(self._pinch_from * factor, cx, cy):
+                self._view_changed()
+
+    def _pan_begin(self, _gesture, _sx: float, _sy: float) -> None:
+        self._finish_text()
+        self._pan = (self.view.ox, self.view.oy, 0.0, 0.0)
+        self.canvas.set_cursor_from_name("grabbing")
+
+    def _pan_update(self, _gesture, dx: float, dy: float) -> None:
+        if self._pan is None:
+            return
+        ox, oy, last_dx, last_dy = self._pan
+        self._pan = (ox, oy, dx, dy)
+        if self.view.pan(dx - last_dx, dy - last_dy):
+            self._view_changed()
+
+    def _pan_end(self, _gesture, _dx, _dy) -> None:
+        self._pan = None
+        self.canvas.set_cursor_from_name("grab" if self._space else "crosshair")
+
+    def _refresh_info(self) -> None:
+        self.zoom_button.set_label(f"{self.view.percent} %")
+        size = f"{self.doc.width} × {self.doc.height} px"
+        if self._upscaled > 1:
+            size += f"  ({self._upscaled}× upscaled)"
+        self.info.set_label(size + (f"   ·   {self._destination}" if self._destination else ""))
+        self._refresh_upscale()
+
+    # -- upscaling ----------------------------------------------------------
+
+    def _refresh_upscale(self) -> None:
+        if not self.up_box.get_visible():
+            return
+        w, h = self.doc.width, self.doc.height
+        busy = self._job is not None
+        low = upscale.suggest(w, h) and self._upscaled == 1
+        self.up_label.set_label("Low resolution · upscale" if low else "Upscale")
+        for widget in (self.up_box, self.up_label):
+            (widget.add_css_class if low else widget.remove_css_class)("suggest")
+        for factor, button in self.up_buttons.items():
+            fits = w * h * factor * factor <= MAX_UPSCALED_PIXELS and w * h <= upscale.MAX_INPUT_PIXELS
+            button.set_sensitive(fits and not busy)
+        if busy:
+            self.up_label.set_label("Upscaling…")
+
+    def _upscale(self, factor: int) -> None:
+        if (self.renderer is None or self._job is not None or not self.up_box.get_visible()
+                or not self.up_buttons[factor].get_sensitive()):
+            return
+        self._finish_text()
+        renderer = self.renderer
+        holder: list[upscale.Job] = []
+        try:
+            job = upscale.start(
+                to_pil(renderer.base), factor,
+                on_progress=lambda f: GLib.idle_add(self._upscale_progress, f),
+                on_done=lambda j: GLib.idle_add(self._upscale_done, j, renderer, factor))
+        except (upscale.UpscaleError, ValueError) as error:
+            self.up_label.set_label(str(error))
+            return
+        holder.append(job)
+        self._job = job
+        self._refresh_upscale()
+
+    def _upscale_progress(self, fraction: float) -> bool:
+        if self._job is not None:
+            self.up_label.set_label(f"Upscaling… {round(fraction * 100)} %")
+        return GLib.SOURCE_REMOVE
+
+    def _upscale_done(self, job: upscale.Job, renderer: Renderer, factor: int) -> bool:
+        if job is not self._job:
+            return GLib.SOURCE_REMOVE       # cancelled, or another picture is open now
+        self._job = None
+        try:
+            image = job.result()
+        except upscale.Cancelled:
+            self._refresh_upscale()
+            return GLib.SOURCE_REMOVE
+        except upscale.UpscaleError as error:
+            self._refresh_upscale()
+            self.up_label.set_label(f"Upscale failed: {str(error).splitlines()[-1][:60]}")
+            return GLib.SOURCE_REMOVE
+        if self.renderer is not renderer:
+            return GLib.SOURCE_REMOVE
+        self.renderer = Renderer(from_pil(image))
+        # Everything drawn so far grows with the picture and stays where it was.
+        self.doc.scale_all(factor, image.width, image.height)
+        self._upscaled *= factor
+        self._new_view(self.view.view_w, self.view.view_h)
+        self._refresh_actions()
+        self._refresh_info()
+        self.canvas.queue_draw()
+        return GLib.SOURCE_REMOVE
+
+    def _cancel_job(self) -> None:
+        job, self._job = self._job, None
+        if job is not None:
+            job.cancel()
 
     # -- emoji --------------------------------------------------------------
 
@@ -839,6 +1105,24 @@ class Editor(Gtk.Window):
         if keyval in (Gdk.KEY_Escape, Gdk.KEY_Return, Gdk.KEY_KP_Enter):
             return True  # acted on at the release
 
+        if keyval == Gdk.KEY_space and not ctrl:
+            if not self._space:
+                self._space = True
+                self.canvas.set_cursor_from_name("grab")
+            return True
+        if keyval in (Gdk.KEY_plus, Gdk.KEY_equal, Gdk.KEY_KP_Add) and not ctrl:
+            self._zoom_centre(ZOOM_STEP)
+            return True
+        if keyval in (Gdk.KEY_minus, Gdk.KEY_KP_Subtract) and not ctrl:
+            self._zoom_centre(1 / ZOOM_STEP)
+            return True
+        if keyval in (Gdk.KEY_0, Gdk.KEY_KP_0) and not ctrl:
+            self._zoom_fit()
+            return True
+        if keyval in (Gdk.KEY_u, Gdk.KEY_U) and not ctrl:
+            self._upscale(4 if shift else 2)
+            return True
+
         if ctrl and keyval in (Gdk.KEY_z, Gdk.KEY_Z):
             (self._redo if shift else self._undo)()
             return True
@@ -875,6 +1159,11 @@ class Editor(Gtk.Window):
         return False
 
     def _released(self, _c, keyval, _code, _state) -> bool:
+        if keyval == Gdk.KEY_space and self._space:
+            self._space = False
+            if self._pan is None:
+                self.canvas.set_cursor_from_name("crosshair")
+            return self.editing is None and not self.picker_open
         if keyval in self._eat_release:
             self._eat_release.discard(keyval)
             return True
