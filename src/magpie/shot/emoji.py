@@ -26,6 +26,7 @@ __all__ = [
     "search",
     "supports",
     "name_of",
+    "chars_in",
     "sticker",
     "Recents",
 ]
@@ -129,12 +130,19 @@ def _lowered(items: list[Emoji]) -> list[tuple[Emoji, str, str, str]]:
 
 
 @functools.cache
+def _names() -> dict[str, str]:
+    return {e.char: e.name for e in catalogue()}
+
+
 def name_of(char: str) -> str:
     """The CLDR name of one emoji character, or the character itself."""
-    for e in catalogue():
-        if e.char == char:
-            return e.name
-    return char
+    return _names().get(char, char)
+
+
+@functools.cache
+def chars_in(group: str) -> list[str]:
+    """Every emoji character of one group, in catalogue order (built once)."""
+    return [e.char for e in catalogue() if e.group == group]
 
 
 def search(query: str, items: list[Emoji] | None = None, limit: int = 120) -> list[Emoji]:

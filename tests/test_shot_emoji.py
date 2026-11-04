@@ -140,3 +140,12 @@ def test_apple_vs_whatsapp_distinct_pixels():
     img_whatsapp = sticker(whatsapp, "🚀", 128)
 
     assert img_apple.tobytes() != img_whatsapp.tobytes()
+
+
+def test_chars_in_and_name_of_are_lookups():
+    from magpie.shot import emoji
+
+    smileys = emoji.chars_in("Smileys & Emotion")
+    assert smileys and smileys is emoji.chars_in("Smileys & Emotion")   # built once
+    assert emoji.name_of(smileys[0]) == emoji.catalogue()[0].name or emoji.name_of(smileys[0])
+    assert emoji.name_of("not an emoji") == "not an emoji"

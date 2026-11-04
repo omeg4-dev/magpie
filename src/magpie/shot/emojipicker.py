@@ -20,11 +20,15 @@ from gi.repository import Gdk, GLib, GObject, Gtk  # noqa: E402
 
 from . import emoji  # noqa: E402
 from .render import from_pil  # noqa: E402
+from .thumbs import Thumbs  # noqa: E402
 
 __all__ = ["EmojiPicker"]
 
 STATE = Path(GLib.get_user_state_dir()) / "magpie"
-THUMB = 64
+THUMB = 56
+
+#: How many of each group are drawn ahead of time, so the first screen of any group is instant.
+PREFETCH = 150
 
 #: What is handed to the editor. Fonts only carry ~100-160 px bitmaps, so anything
 #: bigger than that is an upscale; doing it once here, with a good filter, keeps big
@@ -52,7 +56,10 @@ class EmojiPicker(Gtk.Popover):
 
         self.platforms = emoji.available_platforms()
         self.recents = emoji.Recents(recents_path or STATE / "emoji-recents.json")
-        self._thumbs: dict[tuple[str, str], Gdk.Texture] = {}
+        self._thumbs: dict[str, Thumbs] = {}        # platform id -> its drawing queue
+        self._bound: dict[Gtk.ListItem, str] = {}   # the cells on screen -> their character
+        self._asked: list[tuple[int, str]] = []     # cells waiting to be drawn this frame
+        self._holding = False                       # several changes under way: refill once
         self.group: str | None = None
         self.platform = self._load_platform()
 
@@ -103,6 +110,7 @@ class EmojiPicker(Gtk.Popover):
         factory = Gtk.SignalListItemFactory()
         factory.connect("setup", self._setup)
         factory.connect("bind", self._bind)
+        factory.connect("unbind", self._unbind)
         self.grid = Gtk.GridView(model=Gtk.NoSelection(model=self.model), factory=factory)
         self.grid.add_css_class("emoji")
         self.grid.set_min_columns(10)
@@ -120,6 +128,7 @@ class EmojiPicker(Gtk.Popover):
 
         self.connect("map", self._mapped)
         self._chips[self.platform.id].set_active(True)
+        GLib.timeout_add(1200, self.prefetch)       # after the windows are up, off the critical path
 
     # -- platform and state -------------------------------------------------
 
@@ -144,33 +153,41 @@ class EmojiPicker(Gtk.Popover):
     def _platform_toggled(self, button: Gtk.ToggleButton, platform_id: str) -> None:
         if not button.get_active():
             return
+        self._queue_for(self.platform).forget_queue()
         self.platform = next(p for p in self.platforms if p.id == platform_id)
         self._save_platform()
         self._refill()
+        self.prefetch()
 
     def _group_toggled(self, button: Gtk.ToggleButton, name: str) -> None:
         if button.get_active():
             self.group = name
+            self._holding = True
             self.search.set_text("")
+            self._holding = False
             self._refill()
 
     def _mapped(self, *_args) -> None:
+        self._holding = True            # three changes below, one refill after them
         self.search.set_text("")
         recent = bool(self.recents.items())
         self._groups["recent" if recent else "Smileys & Emotion"].set_active(True)
+        self._holding = False
         self._refill()
         self.search.grab_focus()
 
     # -- the grid -----------------------------------------------------------
 
     def _refill(self) -> None:
+        if self._holding:
+            return
         query = self.search.get_text().strip()
         if query:
             chars = [e.char for e in emoji.search(query, limit=180)]
         elif self.group == "recent":
             chars = self.recents.items()
         else:
-            chars = [e.char for e in emoji.catalogue() if e.group == self.group]
+            chars = emoji.chars_in(self.group)
         self.model.splice(0, self.model.get_n_items(), chars)
         self.empty.set_visible(not chars)
 
@@ -187,22 +204,64 @@ class EmojiPicker(Gtk.Popover):
     def _bind(self, _factory, item: Gtk.ListItem) -> None:
         char = item.get_item().get_string()
         picture = item.get_child()
-        picture.set_paintable(self._thumb(char))
+        self._bound[item] = char
+        texture = self._queue_for(self.platform).get(char)
+        picture.set_paintable(texture)
         picture.set_tooltip_text(emoji.name_of(char))
-
-    def _thumb(self, char: str) -> Gdk.Texture | None:
-        key = (self.platform.id, char)
-        texture = self._thumbs.get(key)
         if texture is None:
-            try:
-                image = emoji.sticker(self.platform, char, THUMB)
-            except OSError:
-                return None
-            texture = Gdk.MemoryTexture.new(
-                THUMB, THUMB, Gdk.MemoryFormat.R8G8B8A8,
-                GLib.Bytes.new(image.tobytes()), THUMB * 4)
-            self._thumbs[key] = texture
-        return texture
+            # Never drawn on this thread: ask, and the picture arrives a frame or two later.
+            if not self._asked:
+                GLib.idle_add(self._flush_asked)
+            self._asked.append((item.get_position(), char))
+
+    def _unbind(self, _factory, item: Gtk.ListItem) -> None:
+        self._bound.pop(item, None)
+
+    # -- thumbnails, drawn on a worker ----------------------------------------
+
+    def _queue_for(self, platform: emoji.Platform) -> Thumbs:
+        queue = self._thumbs.get(platform.id)
+        if queue is None:
+            def draw(char: str, platform=platform):
+                try:
+                    image = emoji.sticker(platform, char, THUMB)
+                except OSError:
+                    return None
+                return Gdk.MemoryTexture.new(
+                    THUMB, THUMB, Gdk.MemoryFormat.R8G8B8A8,
+                    GLib.Bytes.new(image.tobytes()), THUMB * 4)
+
+            def deliver(chars: list[str], platform_id=platform.id) -> None:
+                GLib.idle_add(self._arrived, platform_id, chars)
+
+            queue = self._thumbs[platform.id] = Thumbs(draw, deliver)
+        return queue
+
+    def _flush_asked(self) -> bool:
+        asked, self._asked = sorted(self._asked), []
+        self._queue_for(self.platform).want(char for _pos, char in asked)
+        return GLib.SOURCE_REMOVE
+
+    def _arrived(self, platform_id: str, chars: list[str]) -> bool:
+        """Drawn pictures are in: fill the cells that were waiting for them."""
+        if platform_id == self.platform.id:
+            queue = self._queue_for(self.platform)
+            fresh = set(chars)
+            for item, char in list(self._bound.items()):
+                if char in fresh:
+                    picture = item.get_child()
+                    if picture is not None:
+                        picture.set_paintable(queue.get(char))
+        return GLib.SOURCE_REMOVE
+
+    def prefetch(self) -> bool:
+        """Draw the first screen of every group, and the recents, while nothing else is going on."""
+        queue = self._queue_for(self.platform)
+        wanted = list(self.recents.items())
+        for group in GROUP_ICONS:
+            wanted.extend(emoji.chars_in(group)[:PREFETCH])
+        queue.prefetch(wanted)
+        return GLib.SOURCE_REMOVE
 
     # -- choosing -----------------------------------------------------------
 
