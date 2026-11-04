@@ -114,6 +114,8 @@ class Renderer:
         self.height = base.get_height()
         self._pil: Image.Image | None = None
         self._effects: dict[tuple, cairo.ImageSurface] = {}
+        self._view_size: tuple[int, int] | None = None
+        self._view_surface: cairo.ImageSurface | None = None
 
     # -- public -------------------------------------------------------------
 
@@ -122,12 +124,18 @@ class Renderer:
         """The picture and everything on it. `scale` is screen pixels per image
         pixel; `hide` leaves one object out (the one being typed into)."""
         ctx.save()
-        ctx.scale(scale, scale)
-        ctx.set_source_surface(self.base, 0, 0)
-        if scale != 1.0:
-            # Down-scaling a screenshot with the default filter shimmers.
-            ctx.get_source().set_filter(cairo.FILTER_BEST if scale < 1 else cairo.FILTER_NEAREST)
-        ctx.paint()
+        if scale < 1.0:
+            # Down-scaling a screenshot on every frame is slow and shimmers, so
+            # it is shrunk once, well, and that is what gets painted.
+            ctx.set_source_surface(self._view(scale), 0, 0)
+            ctx.paint()
+            ctx.scale(scale, scale)
+        else:
+            ctx.scale(scale, scale)
+            ctx.set_source_surface(self.base, 0, 0)
+            if scale != 1.0:
+                ctx.get_source().set_filter(cairo.FILTER_NEAREST)
+            ctx.paint()
         for item in items:
             if item.id != hide:
                 self._paint_item(ctx, item)
@@ -144,6 +152,15 @@ class Renderer:
         surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, self.width, self.height)
         self.paint(cairo.Context(surface), items, 1.0)
         return surface
+
+    def _view(self, scale: float) -> cairo.ImageSurface:
+        key = (round(self.width * scale), round(self.height * scale))
+        if self._view_size != key:
+            if self._pil is None:
+                self._pil = to_pil(self.base).convert("RGB")
+            self._view_surface = from_pil(self._pil.resize(key, Image.LANCZOS))
+            self._view_size = key
+        return self._view_surface
 
     # -- items --------------------------------------------------------------
 

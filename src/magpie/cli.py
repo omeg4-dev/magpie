@@ -22,6 +22,7 @@ USAGE = """\
 magpie — the clipboard, remembered
 
   magpie view [--mode M]  open the window (Super+V); M is clipboard|grid|screenshots|starred
+  magpie shot [MODE]      take a screenshot; MODE is region (default), monitor or all
   magpie store            take stdin as a clipboard entry (for wl-paste --watch)
   magpie sync             import Noctalia's history and index new screenshots
   magpie ocr [n]          read the words off pictures nobody has read yet
@@ -64,6 +65,13 @@ def cmd_view(config: Config, argv: list[str]) -> int:
     from .ui.app import run
 
     return run(["magpie"] + argv)
+
+
+def cmd_shot(config: Config, argv: list[str]) -> int:
+    """Take a screenshot: `region` (default), `monitor` or `all`."""
+    from .ui.app import run
+
+    return run(["magpie", "shot"] + argv)
 
 
 def cmd_store(config: Config, argv: list[str]) -> int:
@@ -228,6 +236,7 @@ def _line(entry) -> None:
 
 COMMANDS = {
     "view": cmd_view,
+    "shot": cmd_shot,
     "store": cmd_store,
     "sync": cmd_sync,
     "ocr": cmd_ocr,

@@ -15,10 +15,10 @@ import sys
 
 __all__ = ["ensure_preloaded", "find_library", "preload_env", "wanted"]
 
-#: The only command that draws anything. LD_PRELOAD is inherited by every
+#: The commands that draw anything. LD_PRELOAD is inherited by every
 #: child, and `magpie ocr` spawns thousands of magick and tesseract processes
 #: that have no business loading a Wayland library.
-DRAWS = "view"
+DRAWS = ("view", "shot")
 
 #: The library itself, first. gtk4-layer-shell also ships a
 #: liblayer-shell-preload.so, but preloading that one alone still leaves the
@@ -38,7 +38,7 @@ MARKER = "MAGPIE_PRELOADED"
 
 def wanted(argv: list[str]) -> bool:
     """Whether this invocation is the one that puts a surface on screen."""
-    return bool(argv) and argv[0] == DRAWS
+    return bool(argv) and argv[0] in DRAWS
 
 
 def find_library(candidates: tuple[str, ...] = CANDIDATES) -> str | None:

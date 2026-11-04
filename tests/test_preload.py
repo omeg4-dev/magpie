@@ -9,6 +9,7 @@ def test_only_the_window_needs_it():
     # layer-shell library.
     assert preload.wanted(["view"])
     assert preload.wanted(["view", "--mode", "starred"])
+    assert preload.wanted(["shot", "region"])
     assert not preload.wanted(["ocr"])
     assert not preload.wanted(["store"])
     assert not preload.wanted(["sync"])

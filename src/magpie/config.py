@@ -32,6 +32,13 @@ class Config:
     #: The screenshot folder, indexed in place and never written to.
     screenshots: Path = Path("/mnt/xv/Random/Screenshots")
 
+    #: Where `magpie shot` saves, in a folder per month. A separate drive, so
+    #: the tool checks it is really mounted before trusting it.
+    shots_root: Path = Path("/mnt/xv/Random/Screenshots/Screenshots")
+
+    #: Where it saves instead when that drive is not there.
+    shots_fallback: Path = Path.home() / "Pictures" / "Screenshots"
+
     #: How long a deleted entry stays recoverable.
     purge_days: int = 30
 

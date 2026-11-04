@@ -26,7 +26,7 @@ import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Gdk", "4.0")
 
-from gi.repository import Gio, Gtk  # noqa: E402
+from gi.repository import Gio, GLib, Gtk  # noqa: E402
 
 from ..config import load  # noqa: E402
 from ..store import Store  # noqa: E402
@@ -71,11 +71,36 @@ class MagpieApp(Gtk.Application):
         # not: Noctalia rewrites the palette and this follows it.
         style.watch()
         self.store = Store(load().store)
+        self._start_shot()
+
+    def _start_shot(self) -> None:
+        """The screenshot tool, in this process so a keypress finds it running.
+
+        Isolated: if it cannot start, the clipboard must still work.
+        """
+        self.shot = None
+        try:
+            from ..shot.session import Session
+
+            self.shot = Session(self)
+            action = Gio.SimpleAction.new("shot", GLib.VariantType.new("s"))
+            action.connect("activate", lambda _a, mode: self.shot.trigger(mode.get_string()))
+            self.add_action(action)
+            GLib.idle_add(self.shot.warm)
+        except Exception:  # pragma: no cover - depends on the machine
+            import traceback
+
+            traceback.print_exc()
 
     def _on_command_line(self, _app, command_line) -> int:
         # Every invocation after the first arrives here rather than starting a
         # new process. That is the whole point of the single instance.
         argv = command_line.get_arguments()
+        if argv[1:2] == ["shot"]:
+            if self.shot is not None:
+                self.hold()
+                self.shot.trigger(argv[2] if len(argv) > 2 else "region")
+            return 0
         self._present(hidden="--hidden" in argv, mode=_mode_from(argv))
         return 0
 
