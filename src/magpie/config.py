@@ -39,6 +39,9 @@ class Config:
     #: Where it saves instead when that drive is not there.
     shots_fallback: Path = Path.home() / "Pictures" / "Screenshots"
 
+    #: The short animation when the screenshot editor opens.
+    shot_animation: bool = True
+
     #: How long a deleted entry stays recoverable.
     purge_days: int = 30
 

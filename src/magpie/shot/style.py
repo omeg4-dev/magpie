@@ -14,7 +14,11 @@ from ..palette import WHERE, Palette, mix, read
 from ..ui.style import MONO, SANS
 from .model import PALETTE
 
-__all__ = ["apply", "watch", "css"]
+__all__ = ["apply", "watch", "css", "OPENING"]
+
+#: The class that plays the opening animation, and how long each part takes (ms).
+OPENING = "opening"
+DIM_MS, CARD_MS, HINT_MS = 130, 160, 110
 
 
 def css(p: Palette) -> str:
@@ -48,7 +52,7 @@ window.shot-overlay {{ background: transparent; }}
 /* ── editor ───────────────────────────────────────────────────────────── */
 
 window.shot-editor {{
-  background: alpha(#000000, 0.58);
+  background-color: alpha(#000000, 0.58);
   font-family: {SANS};
   color: {p.bone};
 }}
@@ -227,6 +231,28 @@ gridview.emoji > child {{ padding: 0; border-radius: 9px; }}
 gridview.emoji > child:hover {{ background: {p.slate}; }}
 gridview.emoji > child:selected, gridview.emoji > child:focus {{ background: {p.accent_dim}; }}
 .empty {{ color: {p.faint}; font-size: 12px; }}
+
+/* ── opening ──────────────────────────────────────────────────────────────
+   Short on purpose: the card rises a few pixels and fades in while the dim
+   comes up behind it. Closing has no animation, so Enter is never a pause.
+   The `opening` class is added when the window is mapped (see editor.py), which
+   is what restarts the animation on every screenshot. */
+
+@keyframes shot-card-in {{
+  from {{ opacity: 0; transform: translateY(14px) scale(0.975); }}
+  to   {{ opacity: 1; transform: translateY(0) scale(1); }}
+}}
+@keyframes shot-dim-in {{
+  from {{ background-color: alpha(#000000, 0); }}
+  to   {{ background-color: alpha(#000000, 0.58); }}
+}}
+@keyframes shot-fade-in {{
+  from {{ opacity: 0; }}
+  to   {{ opacity: 1; }}
+}}
+window.shot-editor.opening {{ animation: shot-dim-in {DIM_MS}ms ease-out; }}
+window.shot-editor.opening .card {{ animation: shot-card-in {CARD_MS}ms cubic-bezier(0.2, 0.8, 0.2, 1); }}
+.shot-hint.opening {{ animation: shot-fade-in {HINT_MS}ms ease-out; }}
 """
 
 

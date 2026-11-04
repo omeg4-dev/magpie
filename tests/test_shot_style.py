@@ -18,3 +18,13 @@ def test_every_tool_has_an_icon():
 def test_tool_keys_are_unique():
     keys = [key for *_rest, key in TOOLS]
     assert len(keys) == len(set(keys))
+
+
+def test_opening_animation_is_defined_and_switchable():
+    sheet = style.css(DEFAULTS)
+    for name in ("shot-card-in", "shot-dim-in", "shot-fade-in"):
+        assert f"@keyframes {name}" in sheet
+    assert f"window.shot-editor.{style.OPENING} .card" in sheet
+    assert f".shot-hint.{style.OPENING}" in sheet
+    from magpie.config import Config
+    assert Config().shot_animation is True

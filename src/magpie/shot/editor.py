@@ -25,7 +25,9 @@ gi.require_version("Pango", "1.0")
 from gi.repository import Gdk, GLib, Gtk, Pango  # noqa: E402
 
 from ..palette import Palette, _rgb, read  # noqa: E402
+from ..config import load  # noqa: E402
 from . import icons  # noqa: E402
+from .style import OPENING  # noqa: E402
 from .emojipicker import EmojiPicker  # noqa: E402
 from .model import (PALETTE, Arrow, Badge, Blur, Doc, Ellipse, Highlighter, Item,  # noqa: E402
                     Line, Pen, Pixelate, Rect, Redact, Sticker, Text, Tool, rgba)
@@ -135,6 +137,7 @@ class Editor(Gtk.Window):
 
         as_layer(self, None)
         self._build(recents_path)
+        self.connect("map", self._mapped)
 
         keys = Gtk.EventControllerKey()
         keys.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
@@ -373,7 +376,14 @@ class Editor(Gtk.Window):
         self._close()
         self._on_close()
 
+    def _mapped(self, *_args) -> None:
+        # The class is what plays the animation (style.py); adding it as the window
+        # appears restarts it for every screenshot.
+        if load().shot_animation:
+            self.add_css_class(OPENING)
+
     def _close(self) -> None:
+        self.remove_css_class(OPENING)
         self.picker.popdown()
         self.set_visible(False)
         self.renderer = None

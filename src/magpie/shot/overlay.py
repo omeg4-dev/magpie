@@ -27,8 +27,10 @@ gi.require_version("Pango", "1.0")
 gi.require_version("PangoCairo", "1.0")
 from gi.repository import Gdk, GLib, Gtk, Pango, PangoCairo  # noqa: E402
 
+from ..config import load  # noqa: E402
 from ..palette import Palette, _rgb, read  # noqa: E402
 from ..ui.style import MONO, SANS  # noqa: E402
+from .style import OPENING  # noqa: E402
 
 try:
     gi.require_version("Gtk4LayerShell", "1.0")
@@ -94,6 +96,9 @@ class RegionOverlay(Gtk.Window):
         self.area.set_cursor_from_name("crosshair")
 
         self.hint = self._build_hint()
+        # Only the hint fades in; the frozen picture has to be there at once, exactly
+        # over the screen it was taken from.
+        self.hint.connect("map", lambda w: load().shot_animation and w.add_css_class(OPENING))
         overlay = Gtk.Overlay()
         overlay.set_child(self.area)
         overlay.add_overlay(self.hint)
@@ -139,6 +144,7 @@ class RegionOverlay(Gtk.Window):
         self.area.queue_draw()
 
     def disarm(self) -> None:
+        self.hint.remove_css_class(OPENING)
         self.native = self.bright = None
         self._reset()
         self.set_visible(False)
