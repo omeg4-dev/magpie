@@ -66,6 +66,8 @@ class Session:
         mode, _, flag = (spec or "region").partition(":")
         if mode not in MODES:
             mode = "region"
+        if self.state == "editor" and not (self.editor and self.editor.get_visible()):
+            self.state = "idle"     # never let a stuck state lock the key
         if self.state == "overlay":
             self._abandon()     # the key again closes what the key opened
             return
@@ -140,6 +142,14 @@ class Session:
         self._edit(grab.to_surface(image), mon)
 
     def _edit(self, surface, mon: grab.Monitor) -> None:
+        try:
+            self._open_editor(surface, mon)
+        except Exception as error:
+            self.state = "idle"
+            traceback.print_exc()
+            _notify_error("Screenshot failed", str(error))
+
+    def _open_editor(self, surface, mon: grab.Monitor) -> None:
         gdk = self._gdk_monitor(mon.name) or self._gdk_monitors()[0]
         config = load()
         path, fell_back = output.target_path(datetime.now(), root=config.shots_root,

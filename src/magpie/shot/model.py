@@ -433,7 +433,7 @@ class Doc:
         return max(3.0, round(max(self.width, self.height) / 450 * 1.5, 1))
 
     def default_text_size(self) -> float:
-        return max(20.0, round(max(self.width, self.height) / 60))
+        return max(24.0, round(max(self.width, self.height) / 45))
 
     def badge_radius(self) -> float:
         return max(13.0, round(max(self.width, self.height) / 130))

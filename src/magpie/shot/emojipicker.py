@@ -52,15 +52,15 @@ class EmojiPicker(Gtk.Popover):
         self.platform = self._load_platform()
 
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        box.set_size_request(440, 470)
+        box.set_size_request(500, 440)
         self.set_child(box)
 
-        chips = Gtk.Box(spacing=3)
+        chips = Gtk.Box(spacing=1, homogeneous=True)
         chips.add_css_class("platforms")
         self._chips: dict[str, Gtk.ToggleButton] = {}
         first = None
         for p in self.platforms:
-            chip = Gtk.ToggleButton(label=p.label)
+            chip = Gtk.ToggleButton(label=p.label.split(' ')[0])
             chip.set_focusable(False)
             if first is None:
                 first = chip
@@ -100,8 +100,8 @@ class EmojiPicker(Gtk.Popover):
         factory.connect("bind", self._bind)
         self.grid = Gtk.GridView(model=Gtk.NoSelection(model=self.model), factory=factory)
         self.grid.add_css_class("emoji")
-        self.grid.set_min_columns(9)
-        self.grid.set_max_columns(9)
+        self.grid.set_min_columns(10)
+        self.grid.set_max_columns(10)
         self.grid.set_single_click_activate(True)
         self.grid.connect("activate", self._activated)
         scroller = Gtk.ScrolledWindow()

@@ -172,8 +172,8 @@ class Editor(Gtk.Window):
 
         self.overlay = Gtk.Overlay()
         self.overlay.set_child(self.canvas)
-        self.overlay.set_halign(Gtk.Align.CENTER)
-        self.overlay.set_valign(Gtk.Align.CENTER)
+        self.overlay.set_hexpand(True)
+        self.overlay.set_vexpand(True)
         self.wrap = Gtk.Box()
         self.wrap.add_css_class("canvas-wrap")
         self.wrap.set_hexpand(True)

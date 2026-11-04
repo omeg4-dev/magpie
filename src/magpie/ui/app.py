@@ -62,6 +62,7 @@ class MagpieApp(Gtk.Application):
                    | (Gio.ApplicationFlags.NON_UNIQUE if sandboxed
                       else Gio.ApplicationFlags.DEFAULT_FLAGS)))
         self._window: Window | None = None
+        self._held = False
         self.connect("command-line", self._on_command_line)
 
     def do_startup(self) -> None:
@@ -98,7 +99,9 @@ class MagpieApp(Gtk.Application):
         argv = command_line.get_arguments()
         if argv[1:2] == ["shot"]:
             if self.shot is not None:
-                self.hold()
+                if not self._held:
+                    self._held = True
+                    self.hold()  # a screenshot process stays up for the next key
                 self.shot.trigger(argv[2] if len(argv) > 2 else "region")
             return 0
         self._present(hidden="--hidden" in argv, mode=_mode_from(argv))
