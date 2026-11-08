@@ -46,6 +46,11 @@ class Session:
         self.shots: list[tuple[grab.Monitor, object, object]] = []  # monitor, PIL image, surface
         style.apply()
         style.watch()
+        # An output that is switched off and on (or unplugged) comes back as a new
+        # Gdk.Monitor under the same connector name; the overlay that was bound to
+        # the old one would then land on whichever output the compositor likes.
+        Gdk.Display.get_default().get_monitors().connect(
+            "items-changed", lambda *_a: GLib.idle_add(self._monitors_changed))
 
     # -- the way in ---------------------------------------------------------
 
@@ -202,11 +207,30 @@ class Session:
     def _gdk_monitor(self, name: str):
         return next((m for m in self._gdk_monitors() if m.get_connector() == name), None)
 
+    def _monitors_changed(self) -> bool:
+        """Drop overlays that belong to a monitor that is gone, then rebuild them hidden."""
+        if self.state == "overlay":
+            self._abandon()
+        self._prune_overlays()
+        self.warm()
+        return GLib.SOURCE_REMOVE
+
+    def _prune_overlays(self) -> None:
+        current = {m.get_connector(): m for m in self._gdk_monitors()}
+        for name, overlay in list(self.overlays.items()):
+            if current.get(name) is not overlay.gdk_monitor:
+                del self.overlays[name]
+                overlay.destroy()
+
     def _overlay(self, gdk_monitor):
         from .overlay import RegionOverlay
 
         name = gdk_monitor.get_connector()
         overlay = self.overlays.get(name)
+        if overlay is not None and overlay.gdk_monitor is not gdk_monitor:
+            del self.overlays[name]     # bound to a monitor that no longer exists
+            overlay.destroy()
+            overlay = None
         if overlay is None:
             overlay = RegionOverlay(self.app, gdk_monitor, on_region=self._on_region,
                                     on_whole=self._on_whole, on_cancel=self._abandon)
