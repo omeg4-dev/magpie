@@ -1,0 +1,19 @@
+id = "omega/magpie-shot"
+name = "Magpie screenshot"
+version = "0.1.0"
+plugin_api = 5
+author = "omega"
+license = "MIT"
+icon = "camera"
+description = "A bar button that opens a menu of screenshot kinds, with their shortcuts."
+
+[[widget]]
+id = "button"
+entry = "button.luau"
+
+[[panel]]
+id = "menu"
+entry = "menu.luau"
+width = 320
+height = 232
+placement = "attached"

@@ -82,6 +82,27 @@ COLUMNS_ADDED_LATER = [
 COLUMNS_RENAMED = [("pinned", "starred")]
 
 
+#: How much of a copied text the list queries bring back. The rows and the
+#: cards show a few lines; the whole of a hundred-kilobyte paste, times two
+#: thousand rows, was most of a tab's query. `Store.get` has the whole text,
+#: and the window asks for it when an entry is selected.
+LIST_TEXT = 2000
+
+_LIST_COLUMNS = (
+    "id, key, sha256, kind, mime, source, path, bytes, first_seen_ms, last_seen_ms,"
+    " times_seen, starred, deleted_at_ms, time_approx, preview, ocr_ms,"
+    f" substr(text, 1, {LIST_TEXT}) AS text")
+
+
+#: The same, for the search query, where `text` also names a column of the
+#: full-text table and has to be said as `entry.text`.
+_LIST_COLUMNS_JOINED = (
+    "entry.id, entry.key, entry.sha256, entry.kind, entry.mime, entry.source, entry.path,"
+    " entry.bytes, entry.first_seen_ms, entry.last_seen_ms, entry.times_seen, entry.starred,"
+    " entry.deleted_at_ms, entry.time_approx, entry.preview, entry.ocr_ms,"
+    f" substr(entry.text, 1, {LIST_TEXT}) AS text")
+
+
 @dataclass(frozen=True)
 class Month:
     """One month that has something in it, and how much."""
@@ -168,6 +189,14 @@ class Store:
         self.db.execute("PRAGMA synchronous = NORMAL")
         self.db.executescript(SCHEMA)
         self._migrate()
+
+    def version(self) -> int:
+        """Changes whenever *another* connection committed — the watcher, say.
+
+        Cheap enough to ask on every keypress, which is what it is for: the
+        window only re-queries when something was copied since it last looked.
+        """
+        return self.db.execute("PRAGMA data_version").fetchone()[0]
 
     def _migrate(self) -> None:
         """Bring an older store up to the current schema.
@@ -285,6 +314,12 @@ class Store:
             return Path(entry.path).read_bytes()
         return self._blob_path(entry.sha256).read_bytes()
 
+    def payload_head(self, entry: Entry, size: int) -> bytes:
+        """The first `size` bytes of the payload: enough for a picture's header."""
+        path = Path(entry.path) if entry.path is not None else self._blob_path(entry.sha256)
+        with open(path, "rb") as f:
+            return f.read(size)
+
     def months(self, source: str | None = None) -> list[Month]:
         """Which months have anything in them, oldest first, with counts.
 
@@ -324,7 +359,7 @@ class Store:
             params.extend(month_bounds(*month))
         params.append(limit)
         rows = self.db.execute(
-            f"SELECT * FROM entry WHERE {' AND '.join(where)}"
+            f"SELECT {_LIST_COLUMNS} FROM entry WHERE {' AND '.join(where)}"
             " ORDER BY last_seen_ms DESC, id DESC LIMIT ?", params)
         return [_entry(row) for row in rows]
 
@@ -351,7 +386,7 @@ class Store:
             params.extend(month_bounds(*month))
         params.append(limit)
         rows = self.db.execute(
-            "SELECT entry.* FROM entry_fts JOIN entry ON entry.id = entry_fts.rowid"
+            f"SELECT {_LIST_COLUMNS_JOINED} FROM entry_fts JOIN entry ON entry.id = entry_fts.rowid"
             f" WHERE entry_fts MATCH ? AND {' AND '.join(where)}"
             " ORDER BY entry.last_seen_ms DESC, entry.id DESC LIMIT ?", params)
         return [_entry(row) for row in rows]

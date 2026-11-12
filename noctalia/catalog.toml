@@ -1,0 +1,16 @@
+# Plugin source catalog for magpie's screenshot menu.
+#
+# Register this repository with:
+#   noctalia msg plugins source add magpie path ~/.local/share/magpie/noctalia
+#   noctalia msg plugins enable omega/magpie-shot
+# then place it: [widget.shot] type = "omega/magpie-shot:button" + "shot" in a bar lane.
+
+[[plugin]]
+id = "omega/magpie-shot"
+name = "Magpie screenshot"
+version = "0.1.0"
+plugin_api = 5
+author = "omega"
+license = "MIT"
+icon = "camera"
+description = "A bar button that opens a menu of screenshot kinds, with their shortcuts."

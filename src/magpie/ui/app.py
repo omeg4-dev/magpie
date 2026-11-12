@@ -26,7 +26,7 @@ import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Gdk", "4.0")
 
-from gi.repository import Gio, GLib, Gtk  # noqa: E402
+from gi.repository import Gdk, Gio, GLib, Gtk  # noqa: E402
 
 from ..config import load  # noqa: E402
 from ..store import Store  # noqa: E402
@@ -63,16 +63,38 @@ class MagpieApp(Gtk.Application):
                       else Gio.ApplicationFlags.DEFAULT_FLAGS)))
         self._window: Window | None = None
         self._held = False
+        self._warming = False
         self.connect("command-line", self._on_command_line)
 
     def do_startup(self) -> None:
         Gtk.Application.do_startup(self)
+        if Gdk.Display.get_default() is None:
+            # Started before the compositor was up (a login service can be).
+            # Exit *non-zero*: a clean exit is not restarted, and a resident
+            # process that quietly is not resident is why Super+V felt slow.
+            print("magpie: no display yet", file=sys.stderr)
+            sys.stderr.flush()
+            os._exit(1)    # not sys.exit: SystemExit inside a GLib callback is swallowed
         style.apply()
         # The window is open for the life of the session, and the wallpaper is
         # not: Noctalia rewrites the palette and this follows it.
         style.watch()
         self.store = Store(load().store)
         self._start_shot()
+        self._start_view()
+
+    def _start_view(self) -> None:
+        """`view` as a D-Bus action, so the key is a ~10 ms message, not a new Python."""
+        action = Gio.SimpleAction.new("view", GLib.VariantType.new("s"))
+        action.connect("activate", self._on_view_action)
+        self.add_action(action)
+
+    def _on_view_action(self, _action, mode) -> None:
+        if not self._held:
+            self._held = True
+            self.hold()
+        wanted = mode.get_string() if mode is not None else ""
+        self._present(hidden=False, mode=wanted if wanted in _modes() else None)
 
     def _start_shot(self) -> None:
         """The screenshot tool, in this process so a keypress finds it running.
@@ -114,7 +136,14 @@ class MagpieApp(Gtk.Application):
             self._window.connect("close-request", self._on_close)
         if hidden:
             self.hold()  # nothing on screen, but stay alive for the next press
+            self._window.rest()
+            GLib.idle_add(self._warm)
             return
+        if self._warming:       # a real opening beats the warm-up: see _warm
+            self._warming = False
+            if Gtk4LayerShell is not None:
+                Gtk4LayerShell.set_keyboard_mode(
+                    self._window, Gtk4LayerShell.KeyboardMode.EXCLUSIVE)
         # `--mode screenshots` opens straight into the browser, so a key of its
         # own can go there without passing through the clipboard first.
         # Everything the opening does — refreshing, drawing, taking the
@@ -122,11 +151,55 @@ class MagpieApp(Gtk.Application):
         # exactly once.
         self._window.open_at(mode or "clipboard")
 
+    def _warm(self) -> bool:
+        """Map the window once, invisibly, so the first Super+V is as quick as the rest.
+
+        Building the widgets is not what the first press pays for; creating the
+        layer surface and the renderer's first frame is, and that cannot happen
+        without being on screen. So it happens here: transparent, taking no
+        keys, for a quarter of a second, at login.
+        """
+        w = self._window
+        if w is None or w.get_visible() or Gtk4LayerShell is None:
+            return GLib.SOURCE_REMOVE
+        self._warming = True
+        Gtk4LayerShell.set_keyboard_mode(w, Gtk4LayerShell.KeyboardMode.NONE)
+        w.set_opacity(0.0)
+        w.present()
+        # GTK builds a couple of hundred rows the first time a view is shown,
+        # and that is most of what the first switch to the grid cost. Show
+        # each view once now, while nobody can see it.
+        for at, mode in enumerate(("grid", "starred", "screenshots", "clipboard")):
+            GLib.timeout_add(120 + 130 * at, self._warm_mode, mode)
+        GLib.timeout_add(120 + 130 * 4 + 120, self._warm_done)
+        return GLib.SOURCE_REMOVE
+
+    def _warm_mode(self, mode: str) -> bool:
+        if self._warming and self._window is not None:
+            self._window.set_mode(mode)
+        return GLib.SOURCE_REMOVE
+
+    def _warm_done(self) -> bool:
+        w = self._window
+        if self._warming and w is not None:
+            self._warming = False
+            w.set_visible(False)
+            w.set_opacity(1.0)
+            Gtk4LayerShell.set_keyboard_mode(w, Gtk4LayerShell.KeyboardMode.EXCLUSIVE)
+        return GLib.SOURCE_REMOVE
+
     def _on_close(self, window) -> bool:
         """Closing hides the window; the process stays for the next Super+V."""
         window.set_visible(False)
         self.hold()
+        window.rest()   # while nobody is looking: ready for the next Super+V
         return True
+
+
+def _modes() -> tuple:
+    from ..browse import Browse
+
+    return tuple(Browse.MODES)
 
 
 def _mode_from(argv: list[str]) -> str | None:

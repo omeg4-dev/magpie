@@ -25,7 +25,10 @@ no GTK in it and is tested. This file is the drawing.
 
 from __future__ import annotations
 
+import functools
+import os
 import subprocess
+import sys
 from datetime import datetime
 from pathlib import Path
 
@@ -36,7 +39,7 @@ from ..browse import Browse
 from ..facts import lines as facts_for
 from ..paste import to_clipboard
 from ..shape import to_tile
-from ..store import Entry
+from ..store import LIST_TEXT, Entry
 from ..update import plan
 from .datebar import DateBar
 from .popout import popout
@@ -68,6 +71,12 @@ STAMP_W, STAMP_H = 48, 34
 #: a grid whatever you happened to copy.
 TILE_W, TILE_H = 150, 104
 
+#: How far down the list the look-ahead goes: the first screenful or two.
+AHEAD_ENTRIES, AHEAD_IMAGES = 60, 40
+
+#: Arrowing this close to the last loaded row fetches the next page.
+GROW_AT_ROWS = 40
+
 #: What fits in a text tile, measured rather than guessed: FiraCode Nerd Font
 #: Mono at 10.5px is 6px per character and 14px per line, and the card has
 #: 26px of padding across and 22px down. Cut to this before GTK sees it — an
@@ -88,8 +97,11 @@ WIDTH, HEIGHT = 1040, 690
 #: The opening. A hundred milliseconds of fade and eight pixels of rise —
 #: enough that the window arrives rather than blinks, short enough that it is
 #: over before you could have read anything in it.
-APPEAR_MS = 105
-RISE = 8
+APPEAR_MS = 85
+RISE = 6
+#: Opacity of the first frame. Never 0: a window that starts invisible spends
+#: its first frames being late.
+APPEAR_FROM = 0.55
 
 #: The keys that make the window go away. They are acted on when they are
 #: released rather than when they are pressed — see `_on_key_release`.
@@ -123,13 +135,16 @@ class Window(Gtk.Window):
         self._preview_timeout = 0
         self._filter_timeout = 0
         self._syncing = False
+        self._growing = False
+        self._only: str | None = None
         self._quiet = False
         self._pending: Entry | None = None
         self._totals: dict[str, int] = {}
         #: The ids the views are currently holding, so a refresh can work out
         #: how little it has to change.
-        self._shown: list[int] = []
+        self._shown_by: dict[str, list[int]] = {mode: [] for mode in Browse.MODES}
         self._anim = 0
+        self._rested_at = -1
         # Looked up once. `shutil.which` on the way through a copy is a
         # filesystem walk nobody asked for.
         self._player = sounds.find_player()
@@ -195,33 +210,85 @@ class Window(Gtk.Window):
         return column
 
     def _build_views(self) -> Gtk.Widget:
-        """One model, one selection, two ways of looking at it.
+        """One view per tab, each with a model of its own.
 
-        Both views are virtual — GTK builds a widget per visible row and rebinds
-        it as you scroll — and both read the same selection, so switching
-        between them is a swapped child rather than a rebuild.
+        All of them are virtual — GTK builds a widget per visible row and
+        rebinds it as you scroll — and they are built once and kept. GTK holds a
+        couple of hundred rows built in a view whatever its size, and builds
+        them again whenever a view is given different contents; so switching
+        tabs used to mean tearing down and building two hundred rows. Now a tab
+        is a stack page: switching is showing a different one. Only the tab on
+        show is kept up to date; another catches up when it is shown, and what
+        has not changed since costs nothing.
         """
-        self.items = Gio.ListStore.new(EntryItem)
-        self.selection = Gtk.SingleSelection(model=self.items)
-        self.selection.set_autoselect(False)
-        self.selection.set_can_unselect(True)
-        self.selection.connect("selection-changed", self._on_selected)
+        self._stores = {mode: Gio.ListStore.new(EntryItem) for mode in Browse.MODES}
+        self._selections = {}
+        self._views: dict[str, Gtk.Widget] = {}
+        self._scrollers: dict[str, Gtk.ScrolledWindow] = {}
+        self.stack = Gtk.Stack(vexpand=True)
+        self.stack.set_transition_type(Gtk.StackTransitionType.NONE)
+        for mode in Browse.MODES:
+            selection = Gtk.SingleSelection(model=self._stores[mode])
+            selection.set_autoselect(False)
+            selection.set_can_unselect(True)
+            selection.connect("selection-changed", self._on_selected)
+            self._selections[mode] = selection
+            if mode in AS_TILES:
+                view = Gtk.GridView(model=selection, factory=self._factory(
+                    lambda: Tile(self._star_row, self._may_star)))
+                view.add_css_class("gallery")
+                view.set_min_columns(2)
+                view.set_max_columns(8)
+            else:
+                view = Gtk.ListView(model=selection, factory=self._factory(
+                    lambda: Row(self._star_row)))
+                view.add_css_class("list")
+            scroller = _scroller(view)
+            scroller.get_vadjustment().connect("value-changed", self._on_scrolled)
+            self._views[mode], self._scrollers[mode] = view, scroller
+            self.stack.add_named(scroller, mode)
+        self.stack.set_visible_child(self._scrollers["clipboard"])
+        return self.stack
 
-        self.list = Gtk.ListView(model=self.selection,
-                                 factory=self._factory(lambda: Row(self._star_row)))
-        self.list.add_css_class("list")
+    @property
+    def _which(self) -> str:
+        return self._only if self._only is not None else self.browse.mode
 
-        self.grid = Gtk.GridView(model=self.selection,
-                                 factory=self._factory(
-                                     lambda: Tile(self._star_row, self._may_star)))
-        self.grid.add_css_class("gallery")
-        self.grid.set_min_columns(2)
-        self.grid.set_max_columns(8)
+    def _bring_up_to_date(self, which: str, entries: list[Entry]) -> None:
+        """Update the view that is not on show, so that showing it costs nothing.
 
-        self.scroller = Gtk.ScrolledWindow(vexpand=True)
-        self.scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-        self.scroller.set_child(self.list)
-        return self.scroller
+        Done while the window is hidden. The model is changed with no signal
+        about a selection, and the scroll position is left alone.
+        """
+        self._only = which
+        self._syncing = True
+        try:
+            self._apply(entries)
+        finally:
+            self._syncing = False
+            self._only = None
+
+    @property
+    def items(self) -> Gio.ListStore:
+        """The model of the view on show."""
+        return self._stores[self._which]
+
+    @property
+    def selection(self) -> Gtk.SingleSelection:
+        return self._selections[self._which]
+
+    @property
+    def _shown(self) -> list[int]:
+        return self._shown_by[self._which]
+
+    @_shown.setter
+    def _shown(self, ids: list[int]) -> None:
+        self._shown_by[self._which] = ids
+
+    @property
+    def scroller(self) -> Gtk.ScrolledWindow:
+        """The one on show."""
+        return self._scrollers[self._which]
 
     def _factory(self, make) -> Gtk.ListItemFactory:
         factory = Gtk.SignalListItemFactory()
@@ -302,40 +369,90 @@ class Window(Gtk.Window):
     # -- opening ------------------------------------------------------------
 
     def open_at(self, mode: str) -> None:
-        """Super+V. One query, one draw, then it is on screen.
+        """Super+V. On screen first; everything that can wait, waits.
 
-        Everything here is counted, because this is the path a keypress takes.
-        The window already exists; what it must not do is ask the store the
-        same question three times on the way to showing it.
+        `rest()` has already put the window back to a fresh clipboard while it
+        was hidden, so when nothing was copied since, there is no query, no
+        rebuild and no draw to do here — just show it.
         """
-        self._quiet = True
-        self.filter.set_text("")
-        self._quiet = False
-
-        if mode != self.browse.mode:
-            self._apply_mode(mode)
-        elif self.browse.query:
-            self.browse.set_query("")
-        else:
-            # Nothing about the view changed, but something has almost
-            # certainly been copied since it was last looked at.
-            self.browse.reload(keep_selection=False)
-
-        self._totals.clear()
-        self.refresh(reselect=False)
+        began = GLib.get_monotonic_time()
+        fresh = (mode == self.browse.mode and not self.browse.query
+                 and not self.filter.get_text()
+                 and self._rested_at == self.store.version())
+        if not fresh:
+            self._quiet = True
+            self.filter.set_text("")
+            self._quiet = False
+            if mode != self.browse.mode:
+                self._apply_mode(mode)
+            elif self.browse.query:
+                self.browse.set_query("")
+            else:
+                self.browse.reset_page()
+                self.browse.reload(keep_selection=False)
+            self._totals.clear()
+            self.refresh(reselect=False)
         self.present()
         # Straight into typing: the box has the caret before you have let go
         # of the shortcut.
         self.filter.grab_focus()
         self.appear()
         sounds.play("open", self._player)
+        if os.environ.get("MAGPIE_TRACE"):
+            self._trace(began, fresh)
+
+    def _trace(self, began: int, fresh: bool) -> None:
+        """`MAGPIE_TRACE=1`: how long the key took, to stderr. Costs nothing otherwise."""
+        done = GLib.get_monotonic_time()
+
+        def frame(_widget, _clock) -> bool:
+            now = GLib.get_monotonic_time()
+            print(f"magpie: open {'fresh' if fresh else 'stale'}: handler "
+                  f"{(done - began) / 1000:.1f} ms, first frame {(now - began) / 1000:.1f} ms",
+                  file=sys.stderr, flush=True)
+            return GLib.SOURCE_REMOVE
+
+        self.add_tick_callback(frame)
+
+    def rest(self) -> None:
+        """Called once the window is hidden: get ready for the next Super+V.
+
+        Nobody is looking, so this is the time to ask the store and build the
+        rows — the next opening then only has to be drawn.
+        """
+        self._rested_at = -1
+        GLib.idle_add(self._rest)
+
+    def _rest(self) -> bool:
+        if self.get_visible():
+            return GLib.SOURCE_REMOVE
+        self._quiet = True
+        self.filter.set_text("")
+        self._quiet = False
+        if self.browse.mode != "clipboard":
+            self._apply_mode("clipboard")
+        else:
+            self.browse.set_query("")
+        self._totals.clear()
+        self.refresh(reselect=False)
+        self.scroller.get_vadjustment().set_value(0)
+        # The clipboard is also what the grid shows: have that ready as well.
+        self._bring_up_to_date("grid", self.browse.entries())
+        self._scrollers["grid"].get_vadjustment().set_value(0)
+        self._rested_at = self.store.version()
+        return GLib.SOURCE_REMOVE
 
     def appear(self) -> None:
-        """Fade and rise, once, from a clock rather than a frame count."""
+        """Fade and rise, once, from a clock rather than a frame count.
+
+        It starts already half there: the first frame is the window, and the
+        rest is it settling, so there is no moment where a key was pressed and
+        nothing happened.
+        """
         if self._anim:
             self.remove_tick_callback(self._anim)
         self._appeared_at = GLib.get_monotonic_time()
-        self.set_opacity(0.0)
+        self.set_opacity(APPEAR_FROM)
         self.body.set_margin_top(RISE)
         self._anim = self.add_tick_callback(self._appearing)
 
@@ -349,7 +466,7 @@ class Window(Gtk.Window):
         # Ease out: most of the movement happens in the first few frames, so
         # it reads as arriving rather than as sliding.
         eased = 1 - (1 - along) ** 3
-        self.set_opacity(eased)
+        self.set_opacity(APPEAR_FROM + (1 - APPEAR_FROM) * eased)
         self.body.set_margin_top(round(RISE * (1 - eased)))
         return GLib.SOURCE_CONTINUE
 
@@ -407,7 +524,36 @@ class Window(Gtk.Window):
 
     def _move(self, by: int) -> None:
         self.browse.move(by)
+        self._grow_if_near()
         self._sync_selection()
+
+    def _grow_if_near(self) -> None:
+        """Arrowing towards the end of what is loaded: load the next page."""
+        at = self.browse.position
+        if at is not None and at >= len(self.browse.entries()) - GROW_AT_ROWS:
+            self._grow()
+
+    def _on_scrolled(self, adjustment: Gtk.Adjustment) -> None:
+        """Scrolling towards the end of what is loaded: load the next page."""
+        if adjustment is not self.scroller.get_vadjustment():
+            return
+        left = adjustment.get_upper() - adjustment.get_value() - adjustment.get_page_size()
+        if left < 3 * adjustment.get_page_size():
+            self._grow()
+
+    def _grow(self) -> None:
+        if self._growing or not self.browse.more():
+            return
+        self._growing = True
+        adjustment = self.scroller.get_vadjustment()
+        where = adjustment.get_value()
+        self._syncing = True
+        try:
+            self._apply(self.browse.entries())
+        finally:
+            self._syncing = False
+            self._growing = False
+        adjustment.set_value(where)
 
     # -- what is on screen --------------------------------------------------
 
@@ -418,7 +564,7 @@ class Window(Gtk.Window):
 
     @property
     def _view(self) -> Gtk.Widget:
-        return self.grid if self._pictures else self.list
+        return self._views[self.browse.mode]
 
     def set_mode(self, mode: str) -> None:
         self._apply_mode(mode)
@@ -429,7 +575,7 @@ class Window(Gtk.Window):
         self.browse.set_mode(mode)
         for name, button in self._mode_buttons.items():
             button.set_css_classes(["on"] if name == mode else [])
-        self.scroller.set_child(self._view)
+        self.stack.set_visible_child(self.scroller)
         self.left.set_size_request(GRID_WIDTH if self._pictures else LIST_WIDTH, -1)
 
     def _on_filter(self, _entry: Gtk.Entry) -> None:
@@ -469,6 +615,17 @@ class Window(Gtk.Window):
             self._syncing = False
         self._say_how_many(entries)
         self._sync_selection()
+        self._look_ahead(entries)
+
+    def _look_ahead(self, entries: list[Entry]) -> None:
+        """Start making the first screenful of thumbnails for both views.
+
+        On one background worker, so the tab you open next already has its
+        pictures when you get there. The list and the grid use different sizes.
+        """
+        first = [e for e in entries[:AHEAD_ENTRIES] if e.is_image][:AHEAD_IMAGES]
+        self.thumbs.look_ahead(first, TILE_W, TILE_H)
+        self.thumbs.look_ahead(first, STAMP_W, STAMP_H)
 
     def _apply(self, entries: list[Entry]) -> None:
         """Put these entries in the model, changing as little as possible.
@@ -557,15 +714,30 @@ class Window(Gtk.Window):
 
     # -- the preview --------------------------------------------------------
 
+    def _complete(self, entry: Entry) -> Entry:
+        """The entry with all of its text: the lists carry only the start of it."""
+        if entry.kind in ("text", "files") and len(entry.text) >= LIST_TEXT:
+            return self.store.get(entry.id) or entry
+        return entry
+
     def _show_entry(self, entry: Entry) -> None:
+        entry = self._complete(entry)
         # The cheap half is immediate; only the picture waits.
         self._say_facts(entry)
         self._enable_actions(entry)
         self._preview_soon(entry)
 
     def _say_facts(self, entry: Entry | None) -> None:
-        said = [] if entry is None else facts_for(
-            entry, self.thumbs.dimensions(entry) if entry.is_image else None)
+        dims = None
+        if entry is not None and entry.is_image:
+            dims = self.thumbs.known_dimensions(entry)
+            if dims is None:
+                # Not known yet: say the rest now and add the size when it is.
+                self.thumbs.measure_soon(
+                    entry, lambda: self._say_facts(entry),
+                    current=lambda: self.browse.selected is not None
+                    and self.browse.selected.id == entry.id)
+        said = [] if entry is None else facts_for(entry, dims)
         for label, text in zip(self._fact_lines, said + [""] * FACT_LINES):
             label.set_text(text)
             label.set_visible(bool(text))
@@ -584,25 +756,32 @@ class Window(Gtk.Window):
     def _draw_preview(self) -> bool:
         self._preview_timeout = 0
         entry = self._pending
-        if entry is not None:
+        if entry is None:
+            return GLib.SOURCE_REMOVE
+        if entry.is_image:
+            # Decoded on a worker: the pane keeps what it shows until the new
+            # picture is ready, instead of the whole window waiting for it.
+            self.thumbs.want_preview(
+                entry, lambda texture: self._show_preview(self._image_preview(texture)),
+                current=lambda: self._pending is entry)
+        else:
             self._show_preview(self._preview_widget(entry))
         return GLib.SOURCE_REMOVE
 
-    def _preview_widget(self, entry: Entry) -> Gtk.Widget:
-        if entry.is_image:
-            texture = self.thumbs.preview(entry)
-            if texture is not None:
-                picture = Gtk.Picture.new_for_paintable(texture)
-                picture.add_css_class("preview-image")
-                picture.set_can_shrink(True)
-                picture.set_content_fit(Gtk.ContentFit.CONTAIN)
-                # In a scroller, which reports a small natural width however
-                # big the picture is. Without it a wide screenshot makes the
-                # whole window wider than it is supposed to be, because a
-                # layer surface is whatever size it asks for.
-                return _loose(picture)
+    def _image_preview(self, texture) -> Gtk.Widget:
+        if texture is None:
             return _message("This image cannot be shown", "The file may have moved.")
+        picture = Gtk.Picture.new_for_paintable(texture)
+        picture.add_css_class("preview-image")
+        picture.set_can_shrink(True)
+        picture.set_content_fit(Gtk.ContentFit.CONTAIN)
+        # In a scroller, which reports a small natural width however
+        # big the picture is. Without it a wide screenshot makes the
+        # whole window wider than it is supposed to be, because a
+        # layer surface is whatever size it asks for.
+        return _loose(picture)
 
+    def _preview_widget(self, entry: Entry) -> Gtk.Widget:
         view = Gtk.TextView(editable=False, cursor_visible=False)
         view.add_css_class("preview-text")
         view.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
@@ -732,18 +911,12 @@ class Card(Gtk.Box):
             apply(None)
             return
         width, height = size
-        ready = thumbs.cached(entry, width, height)
-        apply(ready)
-        if ready is not None:
-            return
         generation = self._generation
-
-        def later() -> bool:
-            if generation == self._generation:
-                apply(thumbs.stamp(entry, width, height))
-            return GLib.SOURCE_REMOVE
-
-        GLib.idle_add(later, priority=GLib.PRIORITY_LOW)
+        apply(thumbs.cached(entry, width, height))
+        # Decoded on a worker, never here: a bind happens on the thread that
+        # draws the window, and a PNG is tens of milliseconds.
+        thumbs.want(entry, width, height, apply,
+                    current=lambda: generation == self._generation)
 
 
 class Row(Card):
@@ -848,6 +1021,17 @@ class Row(Card):
         self.stamp.set_visible(texture is not None)
 
 
+#: How much of a long copy is looked at to make its card. A tile shows a
+#: handful of short lines; wrapping a hundred kilobytes to throw all but the
+#: first seven away was most of what building the grid cost.
+TILE_SOURCE = 4000
+
+
+@functools.lru_cache(maxsize=4096)
+def _tile_words(text: str) -> str:
+    return to_tile(text[:TILE_SOURCE], TILE_LINES, TILE_CHARS)
+
+
 class Tile(Card):
     """A card in the grid: the picture, or the words when there is no picture.
 
@@ -922,9 +1106,8 @@ class Tile(Card):
         self.append(self.caption)
 
     def show_entry(self, entry: Entry, thumbs: Thumbs) -> None:
-        self._words = None if entry.is_image else to_tile(
-            (entry.text if entry.kind == "text" else entry.preview)
-            or entry.preview, TILE_LINES, TILE_CHARS)
+        self._words = None if entry.is_image else _tile_words(
+            (entry.text if entry.kind == "text" else entry.preview) or entry.preview)
         self._picture(entry, thumbs, (TILE_W, TILE_H), self._show_picture)
         self.caption.set_text(_when(entry))
         _approximate(self.caption, entry.time_approx)
@@ -977,6 +1160,13 @@ def _wrapping(label: Gtk.Label, style: str) -> Gtk.Label:
     label.set_justify(Gtk.Justification.CENTER)
     label.set_max_width_chars(28)
     return label
+
+
+def _scroller(view: Gtk.Widget) -> Gtk.ScrolledWindow:
+    scroller = Gtk.ScrolledWindow(vexpand=True)
+    scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+    scroller.set_child(view)
+    return scroller
 
 
 def _loose(widget: Gtk.Widget) -> Gtk.Widget:

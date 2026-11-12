@@ -43,9 +43,16 @@ class Browse:
     #: one that is not the clipboard.
     MODES = ("clipboard", "grid", "starred", "screenshots")
 
-    def __init__(self, store: Store, limit: int = 2000) -> None:
+    #: How many entries are fetched at first, and how many more each time the
+    #: reader gets near the end. Fetching and building two thousand rows to
+    #: show the first dozen was most of what opening a tab cost.
+    PAGE = 300
+
+    def __init__(self, store: Store, limit: int = 2000, page: int = PAGE) -> None:
         self._store = store
-        self._limit = limit
+        self._cap = limit
+        self._page = max(1, min(page, limit))
+        self._limit = self._page
         self.mode = "clipboard"
         self.query = ""
         self.month: tuple[int, int] | None = None
@@ -89,6 +96,18 @@ class Browse:
             **MODE_FILTERS[self.mode])
         self._at = next((i for i, e in enumerate(self._entries) if e.id == was), 0)
 
+    def reset_page(self) -> None:
+        """Back to the first page; for whoever is about to start from the top."""
+        self._limit = self._page
+
+    def more(self) -> bool:
+        """Fetch the next page, if the last one was full. True when there is more now."""
+        if len(self._entries) < self._limit or self._limit >= self._cap:
+            return False
+        self._limit = min(self._cap, self._limit + self._page)
+        self.reload()
+        return True
+
     def total(self) -> int:
         """How many entries this mode has in it altogether, filter aside."""
         filters = MODE_FILTERS[self.mode]
@@ -104,13 +123,21 @@ class Browse:
     def set_mode(self, mode: str) -> None:
         if mode not in MODE_FILTERS:
             raise ValueError(f"no such mode: {mode}")
+        same = MODE_FILTERS[mode] == MODE_FILTERS[self.mode]
         self.mode = mode
         months = self.months() if mode in BY_MONTH else []
         self.month = months[0].key if months else None
+        if same and self.month is None:
+            # The list and the grid are one history drawn two ways: switching
+            # between them asks the store nothing.
+            self._at = 0
+            return
+        self.reset_page()
         self.reload(keep_selection=False)
 
     def set_month(self, month: tuple[int, int] | None) -> None:
         self.month = month
+        self.reset_page()
         self.reload(keep_selection=False)
 
     def set_query(self, query: str) -> None:
@@ -125,6 +152,7 @@ class Browse:
             self.month = months[0].key if months else None
         # Typing means looking for something, so the best match is where you
         # want to be — not wherever the selection happened to be left.
+        self.reset_page()
         self.reload(keep_selection=False)
 
     # -- moving through it -------------------------------------------------

@@ -24,6 +24,7 @@ magpie — the clipboard, remembered
   magpie view [--mode M]  open the window (Super+V); M is clipboard|grid|screenshots|starred
   magpie shot [MODE]      take a screenshot; MODE is region (default), monitor or all
   magpie store            take stdin as a clipboard entry (for wl-paste --watch)
+  magpie doctor           is the resident window alive? restart it if not (run by a timer)
   magpie sync             import Noctalia's history and index new screenshots
   magpie ocr [n]          read the words off pictures nobody has read yet
   magpie ocr-one <id>     read one picture now (spawned when you copy one)
@@ -65,6 +66,40 @@ def cmd_view(config: Config, argv: list[str]) -> int:
     from .ui.app import run
 
     return run(["magpie"] + argv)
+
+
+def alive(run=None) -> bool:
+    """Whether something answers on the session bus as the resident magpie."""
+    import subprocess
+
+    run = run or subprocess.run
+    try:
+        done = run(["gdbus", "call", "--session", "--dest", "dev.omega.Magpie",
+                    "--object-path", "/dev/omega/Magpie",
+                    "--method", "org.freedesktop.DBus.Peer.Ping"],
+                   capture_output=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return done.returncode == 0
+
+
+def cmd_doctor(config: Config, argv: list[str], run=None) -> int:
+    """The instant Super+V depends on a process that is already running.
+
+    If it is not, say so once and start it: the next press is then fast again
+    instead of being the slow cold start nobody asked for.
+    """
+    import subprocess
+
+    run = run or subprocess.run
+    if alive(run):
+        return 0
+    restarted = run(["systemctl", "--user", "restart", "magpie-view.service"],
+                    capture_output=True).returncode == 0
+    run(["notify-send", "-a", "Magpie", "-u", "low", "Magpie was not running",
+         "Restarted it." if restarted else "Could not restart it: systemctl --user status magpie-view"],
+        capture_output=True)
+    return 0 if restarted else 1
 
 
 def cmd_shot(config: Config, argv: list[str]) -> int:
@@ -237,6 +272,7 @@ def _line(entry) -> None:
 COMMANDS = {
     "view": cmd_view,
     "shot": cmd_shot,
+    "doctor": cmd_doctor,
     "store": cmd_store,
     "sync": cmd_sync,
     "ocr": cmd_ocr,
