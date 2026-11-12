@@ -94,8 +94,12 @@ class Session:
     # -- region -------------------------------------------------------------
 
     def _region(self, monitors: list, focused) -> None:
-        with ThreadPoolExecutor(max_workers=len(monitors) or 1) as pool:
+        with ThreadPoolExecutor(max_workers=len(monitors) + 1) as pool:
+            # The window list is asked for while the screens are being grabbed,
+            # so "click a window" costs no extra time on the key press.
+            asking = pool.submit(grab.windows, monitors)
             grabbed = list(pool.map(self._grab_one, monitors))
+            wins = asking.result()
         self.shots = grabbed
         self.state = "overlay"
         for index, (mon, _img, surface) in enumerate(grabbed):
@@ -103,7 +107,7 @@ class Session:
             if gdk is None:
                 continue
             overlay = self._overlay(gdk)
-            overlay.arm(surface, index)
+            overlay.arm(surface, index, windows=_local(wins, mon))
             overlay.present()
 
     @staticmethod
@@ -236,6 +240,18 @@ class Session:
                                     on_whole=self._on_whole, on_cancel=self._abandon)
             self.overlays[name] = overlay
         return overlay
+
+
+def _local(wins: list, mon: grab.Monitor) -> list:
+    """Windows in the compositor's layout -> relative to one monitor, and only the ones on it."""
+    from dataclasses import replace
+
+    out = []
+    for w in wins:
+        x, y = w.x - mon.x, w.y - mon.y
+        if x < mon.width and y < mon.height and x + w.width > 0 and y + w.height > 0:
+            out.append(replace(w, x=x, y=y))
+    return out
 
 
 def _notify_error(title: str, body: str) -> None:

@@ -26,6 +26,12 @@ __all__ = [
     "grab_monitor",
     "grab_all",
     "to_surface",
+    "Window",
+    "windows",
+    "window_at",
+    "pixel_hex",
+    "nudge_step",
+    "native_rect",
 ]
 
 
@@ -44,6 +50,7 @@ class Monitor:
     pixel_height: int
     scale: float
     focused: bool
+    workspace: int = 0   # the workspace showing on it (0 = unknown)
 
 
 def monitors(run=subprocess.run) -> list[Monitor]:
@@ -80,6 +87,7 @@ def monitors(run=subprocess.run) -> list[Monitor]:
             pixel_height=pixel_height,
             scale=scale,
             focused=bool(item.get("focused", False)),
+            workspace=int((item.get("activeWorkspace") or {}).get("id", 0) or 0),
         ))
     return result
 
@@ -139,3 +147,105 @@ def to_surface(img: Image.Image) -> cairo.ImageSurface:
             buf[y * stride : y * stride + row_len] = raw[y * row_len : (y + 1) * row_len]
     surface.mark_dirty()
     return surface
+
+
+# -- windows, for "click a window to select it" -------------------------------
+
+
+@dataclass(frozen=True)
+class Window:
+    x: int             # logical, in the compositor layout
+    y: int
+    width: int
+    height: int
+    floating: bool
+    focus_rank: int    # 0 = the one you used last; lower is higher up
+    title: str = ""
+
+
+def windows(mons: list[Monitor], run=subprocess.run) -> list[Window]:
+    """The windows you can see right now, on the workspaces showing on a monitor.
+
+    Failure is not an error: window snapping is a convenience, and a screenshot
+    must never wait on, or fail because of, a second `hyprctl` call.
+    """
+    try:
+        res = run(["hyprctl", "-j", "clients"], capture_output=True, text=True)
+        if res.returncode != 0:
+            return []
+        data = json.loads(res.stdout)
+    except (subprocess.CalledProcessError, OSError, ValueError, TypeError):
+        return []
+    showing = {m.workspace for m in mons if m.workspace}
+    out: list[Window] = []
+    for item in data:
+        try:
+            if not item.get("mapped", True) or item.get("hidden", False):
+                continue
+            if showing and int(item["workspace"]["id"]) not in showing:
+                continue
+            (x, y), (w, h) = item["at"], item["size"]
+            if w <= 0 or h <= 0:
+                continue
+            out.append(Window(int(x), int(y), int(w), int(h), bool(item.get("floating")),
+                              int(item.get("focusHistoryID", 99)), str(item.get("title", ""))))
+        except (KeyError, TypeError, ValueError):
+            continue
+    return out
+
+
+def window_at(wins: list[Window], x: float, y: float) -> Window | None:
+    """The window on top at this point: floating ones first, then the most recently used."""
+    hit = [w for w in wins if w.x <= x < w.x + w.width and w.y <= y < w.y + w.height]
+    if not hit:
+        return None
+    return min(hit, key=lambda w: (not w.floating, w.focus_rank))
+
+
+def pixel_hex(data, stride: int, width: int, height: int, x: int, y: int) -> str:
+    """`#rrggbb` of one pixel of a cairo ARGB32 buffer (little endian: B, G, R, A)."""
+    x = max(0, min(width - 1, int(x)))
+    y = max(0, min(height - 1, int(y)))
+    at = y * stride + x * 4
+    return "#{:02x}{:02x}{:02x}".format(data[at + 2], data[at + 1], data[at])
+
+
+#: (dx, dy) per arrow key, in native pixels. `keyval` names, so this module
+#: does not need Gdk.
+_ARROWS = {"Left": (-1, 0), "Right": (1, 0), "Up": (0, -1), "Down": (0, 1)}
+
+
+def nudge_step(name: str, shift: bool) -> tuple[int, int] | None:
+    """How far an arrow key moves the corner being dragged: 1 pixel, 10 with Shift."""
+    step = _ARROWS.get(name)
+    if step is None:
+        return None
+    k = 10 if shift else 1
+    return step[0] * k, step[1] * k
+
+
+def native_rect(a, b, k: float, size: tuple[int, int], nudge: tuple[int, int] = (0, 0),
+                square: bool = False) -> tuple[int, int, int, int]:
+    """The rectangle between two logical points as whole NATIVE pixels: x, y, w, h.
+
+    `k` is native pixels per logical pixel (1.25 on a 1.25x output), `size` the
+    monitor's native size. The rectangle is rounded once, in native pixels, so
+    its edges are on real pixels rather than on 1.25-pixel steps. `nudge` moves
+    the second corner by native pixels (the arrow keys); `square` is Shift.
+    """
+    import math
+
+    nw, nh = size
+
+    def clamp(v: float, hi: int) -> float:
+        return max(0.0, min(float(hi), v))
+
+    ax, ay = clamp(a[0] * k, nw), clamp(a[1] * k, nh)
+    bx, by = clamp(b[0] * k + nudge[0], nw), clamp(b[1] * k + nudge[1], nh)
+    if square:
+        side = max(abs(bx - ax), abs(by - ay))
+        bx = clamp(ax + math.copysign(side, bx - ax or 1), nw)
+        by = clamp(ay + math.copysign(side, by - ay or 1), nh)
+    x0, x1 = sorted((round(ax), round(bx)))
+    y0, y1 = sorted((round(ay), round(by)))
+    return (x0, y0, x1 - x0, y1 - y0)
